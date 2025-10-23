@@ -26,8 +26,8 @@ sh run_mac_linux.sh
 ## Files
 
 - **ASCIIPAINT.py** → main source code  
-- **PAL.txt** → default palette (light → dark)  
-- **keypress*.wav** → keypress audio feedback (optional)
+- **PAL.txt** → default palette (light → dark)  (Optional)
+- **keypress_*.wav** → keypress sound feedback (Optional)
 
 ---
 

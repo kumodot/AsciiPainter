@@ -1,4 +1,4 @@
-# ASCII Painter v0.90
+# ASCII Painter v0.91
 
 A lightweight ASCII art painting tool for drawing with monospaced characters on a grid.
 
@@ -98,6 +98,25 @@ sh run_mac_linux.sh
 - Grid panel displays live cursor coordinates (x, y).  
 - Mouse-over ghost ring shows brush size and active tone character.  
 - Context-sensitive tool info and help hint (`SHIFT+H for HELP`).  
+
+### 🎥 Timelapse Recorder (Updates on 0.91)
+
+ASCII Painter includes an integrated **Timelapse Recorder** that captures each drawing step and exports an animated GIF showing your process.
+
+#### Controls
+- **TL Start / Stop** → begins or ends a recording session.  
+- **TL Export** → converts the recorded frames into a GIF animation.  
+
+#### Features
+- Records each stroke or paint action while you draw.  
+- Automatically captures at intervals or on brush activity.  
+- Exported GIF respects your ASCII canvas size and palette tones.  
+- Customizable FPS and scale through global variables:
+  ```python
+  TIMELAPSE_GIF_FPS = 12         # playback speed
+  TIMELAPSE_EXPORT_SCALE = 1.0   # 1.0 = full size, <1.0 downscales
+  TIMELAPSE_GIF_OPTIMIZE = True  # optimize identical frames
+
 
 ---
 

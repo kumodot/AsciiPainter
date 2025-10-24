@@ -11,7 +11,8 @@ A lightweight ASCII art painting tool for drawing with monospaced characters on 
 
 ASCII Painter is a standalone, keyboard-driven ASCII art editor built with **Python + Pygame + NumPy**.  
 It lets you paint tones, lines, and highlights using a customizable palette of characters (light → dark),  
-export directly to text or PNG, and even play subtle audio feedback while you draw.
+import images and convert them to ASCII tones, export directly to text or PNG,  
+and even record and export timelapses of your drawing process.
 
 ---
 
@@ -56,12 +57,18 @@ sh run_mac_linux.sh
 - “Grid = Cells” mode ensures per-character snapping for exports.  
 - `Ctrl+Shift+C` automatically snaps the exported bounding box to grid divisions when grid is ON.
 
-### 💡 Overlay Image System (NEW in v0.90)
+### 💡 Overlay Image System
 - `SHIFT+O` → Load an overlay image (`.png`, `.jpg`, `.bmp`, `.webp`).  
 - `O` → Show/Hide overlay (toggle visibility).  
 - Adjustable transparency via constant `OVERLAY_OPACITY` (default `0.35`).  
 - Overlay sits visually **above the ASCII canvas but below the UI**, allowing reference tracing.  
 - Ideal for sketching over photos or imported references.
+
+### 🖼️ Image Import
+- Accessible via the **IMPORT** button in the UI.  
+- Converts any selected image (`.png`, `.jpg`, `.bmp`, `.webp`) into ASCII tones.  
+- Uses each pixel’s luminance to calculate the corresponding palette tone (0.0–1.0).  
+- Perfect for generating ASCII art from real images or photos.  
 
 ### 🔊 Audio Feedback
 - Subtle keypress sounds for strokes and UI actions (`keypress_01.wav`, `keypress_02.wav`, …).  
@@ -70,53 +77,25 @@ sh run_mac_linux.sh
 - Automatic gating to prevent sound overlap during fast strokes.  
 - Optional “play full sample on release” for brush-up feedback.
 
-### 🧰 Copy, Export & Import
-- `Ctrl+S` → Save both `.TXT` (ASCII) and `.PNG` (rendered).  
-- `Ctrl+C` → Copy to clipboard as Markdown code block.  
-- `Ctrl+Alt+C` → Copy as HTML `<pre>` block (with non-collapsing spaces).  
-- `Ctrl+Shift+C` → “Copy Fit” mode — crops by content or grid, then resamples.  
-- `Ctrl+Shift+N` → Toggle non-breaking spaces (`NBSP`) for web export.  
-- Optional `startup.txt` auto-loads a previous project on launch.  
-- Image import (via **IMPORT** button) converts brightness to tone values.
-
-### 🪶 Highlight Mode
-- `H` → Toggle highlight mode.  
-- Left click = add white highlight (persistent).  
-- Right click = erase highlight (restore base luma).  
-- `Shift` temporarily switches from Highlight to Paint+Smooth for blending.
-
-### 🧩 Line Drawing
-- `L` → Toggle line mode (with live preview).  
-- `A` → Toggle anti-aliasing (AA).  
-- Lines respect brush radius and soft-edge setting.  
-- Supports both thick AA and basic pixel-style lines.
-
-### 🪄 User Interface
-- Sidebar shows palette picker, spherical tone picker, indicators, and grid controls.  
-- Mode indicators: HLIGHT / SOFT / PAINT / BLUR / LINE / LINEAA.  
-- Clickable buttons for NEW, LOAD, IMPORT, SAVE.  
-- Grid panel displays live cursor coordinates (x, y).  
-- Mouse-over ghost ring shows brush size and active tone character.  
-- Context-sensitive tool info and help hint (`SHIFT+H for HELP`).  
-
-### 🎥 Timelapse Recorder (Updates on 0.91)
-
+### 🎥 Timelapse Recorder
 ASCII Painter includes an integrated **Timelapse Recorder** that captures each drawing step and exports an animated GIF showing your process.
 
 #### Controls
 - **TL Start / Stop** → begins or ends a recording session.  
-- **TL Export** → converts the recorded frames into a GIF animation.  
+- **TL Export** → converts the recorded frames into a GIF animation.
 
 #### Features
-- Records each stroke or paint action while you draw.  
-- Automatically captures at intervals or on brush activity.  
-- Exported GIF respects your ASCII canvas size and palette tones.  
-- Customizable FPS and scale through global variables:
+- Records every brush stroke or change in the canvas.  
+- Automatically captures frames at short intervals or on paint activity.  
+- Displays a centered **“WAIT... EXPORTING”** message during GIF creation.  
+- Exports a clean animated GIF that respects your ASCII resolution and tones.  
+- Clears captured frames automatically after export.  
+- Customizable global parameters:
   ```python
   TIMELAPSE_GIF_FPS = 12         # playback speed
   TIMELAPSE_EXPORT_SCALE = 1.0   # 1.0 = full size, <1.0 downscales
   TIMELAPSE_GIF_OPTIMIZE = True  # optimize identical frames
-
+  ```
 
 ---
 
@@ -151,6 +130,10 @@ ASCII Painter includes an integrated **Timelapse Recorder** that captures each d
 - **Ctrl+Alt+C** → Copy as HTML `<pre>`  
 - **Ctrl+Shift+C** → Copy Fit (Bounding Box / Grid)  
 - **Ctrl+Shift+N** → Toggle NBSP spaces  
+
+### Timelapse
+- **T** → Start / Stop Timelapse Recording  
+- **Shift+T** → Export recorded Timelapse as GIF  
 
 ### Overlay
 - **O** → Show / Hide overlay  

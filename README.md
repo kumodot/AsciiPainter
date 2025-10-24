@@ -1,5 +1,9 @@
 # ASCII Painter v0.91
 
+First DRAPP Release 0.33 BETA (Windows Only for now).  **For donations you can** [buy me a coffee here](https://ko-fi.com/msouza3d#linkModal) ! 
+Thanks for supporting and using the app. 
+<img width="200" height="239" alt="qrcode-pix_manda" src="https://github.com/user-attachments/assets/1d4e4422-d2ca-48c3-bf5f-75644d859022" />
+
 A lightweight ASCII art painting tool for drawing with monospaced characters on a grid.
 
 **Author:** Marcelo Souza (@msouza3d)  

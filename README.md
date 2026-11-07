@@ -1,106 +1,126 @@
-# ASCII Painter v0.91
+# ASCII Painter v0.92
 
-First DRAPP Release 0.33 BETA (Windows Only for now).  **For donations you can** [buy me a coffee here](https://ko-fi.com/msouza3d#linkModal) ! 
-Thanks for supporting and using the app. 
-If you are from Brazil you can send me a donation using PIX QR Code:<br>
+A lightweight ASCII art painting tool: paint with a mouse on a grid of monospaced characters, using a palette that goes from light to dark. The interface is ASCII too, on purpose.
+
+**For donations you can** [buy me a coffee here](https://ko-fi.com/msouza3d)! Thanks for supporting and using the app.
+If you are from Brazil you can send me a donation using the PIX QR Code:<br>
 <img width="200" height="239" alt="qrcode-pix_manda" src="https://github.com/user-attachments/assets/1d4e4422-d2ca-48c3-bf5f-75644d859022" />
-
-
-A lightweight ASCII art painting tool for drawing with monospaced characters on a grid.
 
 **Author:** Marcelo Souza (@msouza3d)  
 **Inspired by:** the work of [Vagon Parovoz](https://www.instagram.com/vagonparovoz/) and classic ANSI/ASCII art editors
+
+![Startup screen](docs/startup_preview.png)
 
 ---
 
 ## Overview
 
-ASCII Painter is a standalone, keyboard-driven ASCII art editor built with **Python + Pygame + NumPy**.  
-It lets you paint tones, lines, and highlights using a customizable palette of characters (light → dark),  
-import images and convert them to ASCII tones, export directly to text or PNG,  
-and even record and export timelapses of your drawing process.
+ASCII Painter is a standalone ASCII art editor built with **Python + Pygame + NumPy**.  
+It lets you paint tones, lines, and highlights using a customizable palette of characters (light to dark),  
+import images and convert them to ASCII tones, export to text or PNG, copy as Markdown/HTML,  
+and record and export timelapses of your drawing process as GIF.
+
+Windows is the main target (a ready-to-run build is published in Releases). From source it should also run on macOS and Linux, but that is untested.
 
 ---
 
 ## How to Run
 
-### Windows
+### Windows, from source
 Double-click:
 ```
-run_windows.bat
+run_asciipaint.bat
+```
+It uses the `.venv` folder if there is one, installs the requirements if they are missing, and runs the newest `ASCIIPAINT_v*.py`.
+
+### macOS / Linux, from source
+```
+sh run_asciipaint.sh
 ```
 
-### macOS / Linux
-Run from terminal:
+### Manually
 ```
-sh run_mac_linux.sh
+pip install -r requirements.txt
+python ASCIIPAINT_v092.py
 ```
+Python 3.11 or newer is recommended (tested on 3.13).
 
 ---
 
-## Files
+## Build the .exe (Windows)
 
-- **ASCIIPAINT.py** → main source code  
-- **PAL.txt** → palette definitions (light → dark, optional)  
-- **keypress_XX.wav** → optional keypress audio feedback files  
-- **startup.txt** → optional auto-load ASCII project at launch  
+- `build_release.bat` makes the safe folder build (no UPX, easier on antivirus) in `releases\ASCII_Painter_v<VERSION>_build\`. Zip that folder before sharing.
+- `build_onefile.bat` makes a single `.exe` in `dist\`.
+
+Both pick the newest `ASCIIPAINT_v*.py` and read its `VERSION`. PyInstaller is installed automatically if it is missing.
+
+---
+
+## Files and Folders
+
+```
+ASCIIPAINT_v092.py     main source (the version number is in the file name)
+assets/PAL.txt         palette definitions (light to dark)
+assets/startup.txt     ASCII project loaded at launch (optional)
+assets/sounds/         keypress_XX.wav feedback sounds (files starting with _ are ignored)
+assets/icon.ico        app icon
+saves/                 where Ctrl+S and the SAVE button write (created on first save)
+tests/smoke_test.py    headless test of the main features
+tools/get_version.py   helper used by the build scripts
+```
+
+**Your files win.** If a `PAL.txt` or `startup.txt` sits next to the script (or next to the `.exe`), it is used instead of the bundled one. The same goes for a `sounds` folder.
+
+**Saves** always go to a `saves` folder next to the script or the `.exe`.
+
+If the app crashes, the error is written to `crash.log` next to it.
 
 ---
 
 ## Features
 
 ### 🎨 Drawing System
-- Paint with ASCII characters mapped from tone values (0.0 light → 1.0 dark).  
-- Adjustable brush radius, opacity, and tone intensity.  
-- Smooth and soft edge brushes with optional blur blending.  
-- Multiple modes: **Paint**, **Blur**, **Highlight**, and **Line** (with or without AA).  
-- Gaussian blur for smoothing and blending ASCII textures.  
-- Reversible palette system: `I` to invert (light ↔ dark).  
+- Paint with ASCII characters mapped from tone values (0.0 light to 1.0 dark).  
+- Adjustable brush radius, opacity, and tone.  
+- Soft edge brush and blur brush.  
+- Modes: **Paint**, **Blur**, **Highlight**, and **Line** (with or without anti-aliasing).  
+- Reversible palette: `I` inverts it (light and dark swap, the darkest tone is always a space).  
+- Undo with `Ctrl+Z` (64 steps). NEW, LOAD and IMPORT can be undone too.  
 
 ### 🧱 Canvas & Grid
-- Square cell canvas with correct aspect ratio for monospaced rendering.  
-- Grid overlay perfectly aligned with character cells (1:1).  
-- “Grid = Cells” mode ensures per-character snapping for exports.  
-- `Ctrl+Shift+C` automatically snaps the exported bounding box to grid divisions when grid is ON.
+- 80 columns canvas with correct aspect ratio for monospaced rendering (4:3 look).  
+- Grid overlay aligned with the character cells (1:1).  
+- `Ctrl+Shift+C` snaps the copied bounding box to grid divisions when the grid is ON.  
 
-### 💡 Overlay Image System
-- `SHIFT+O` → Load an overlay image (`.png`, `.jpg`, `.bmp`, `.webp`).  
-- `O` → Show/Hide overlay (toggle visibility).  
-- Adjustable transparency via constant `OVERLAY_OPACITY` (default `0.35`).  
-- Overlay sits visually **above the ASCII canvas but below the UI**, allowing reference tracing.  
-- Ideal for sketching over photos or imported references.
+### 💡 Overlay Image
+- `Shift+O` loads an overlay image (`.png`, `.jpg`, `.bmp`, `.webp`).  
+- `O` shows or hides it.  
+- Transparency via `OVERLAY_OPACITY` (default `0.35`).  
+- Sits above the ASCII canvas and below the UI, handy for tracing references.  
 
 ### 🖼️ Image Import
-- Accessible via the **IMPORT** button in the UI.  
-- Converts any selected image (`.png`, `.jpg`, `.bmp`, `.webp`) into ASCII tones.  
-- Uses each pixel’s luminance to calculate the corresponding palette tone (0.0–1.0).  
-- Perfect for generating ASCII art from real images or photos.  
+- **IMPORT** button converts an image to ASCII tones using each pixel's luminance.  
+- The image is stretched to the canvas size.  
 
 ### 🔊 Audio Feedback
-- Subtle keypress sounds for strokes and UI actions (`keypress_01.wav`, `keypress_02.wav`, …).  
-- Dual-channel playback with short overlap fades for smooth, non-blocking sound.  
-- Adjustable pitch variation (`PITCH_VARIATION_PCT`, `PITCH_VARIATION_STEPS`).  
-- Automatic gating to prevent sound overlap during fast strokes.  
-- Optional “play full sample on release” for brush-up feedback.
+- Subtle keypress sounds for strokes and UI actions (`keypress_01.wav`, `keypress_02.wav`, ...).  
+- Two-channel playback with short overlap fades, pitch variation, and gating so fast strokes do not pile up.  
+- `Shift+S` turns sound on and off.  
 
 ### 🎥 Timelapse Recorder
-ASCII Painter includes an integrated **Timelapse Recorder** that captures each drawing step and exports an animated GIF showing your process.
+Records your drawing and exports an animated GIF of the process.
 
-#### Controls
-- **TL Start / Stop** → begins or ends a recording session.  
-- **TL Export** → converts the recorded frames into a GIF animation.
-
-#### Features
-- Records every brush stroke or change in the canvas.  
-- Automatically captures frames at short intervals or on paint activity.  
-- Displays a centered **“WAIT... EXPORTING”** message during GIF creation.  
-- Exports a clean animated GIF that respects your ASCII resolution and tones.  
-- Clears captured frames automatically after export.  
-- Customizable global parameters:
+- `T` starts or stops recording. `Ctrl+E` exports the GIF. `Ctrl+T` wipes the recorded frames.  
+- Frames are captured at short intervals while you paint and at the end of every stroke. A frame is skipped when nothing changed.  
+- A short pause is added when you release the mouse (`TL_MOUSE_RELEASE_INJECT_FRAMES`).  
+- When the frame limit is reached you are asked if you want to export.  
+- If an export fails or is cancelled, your frames are kept.  
+- Settings (top of the source file):
   ```python
-  TIMELAPSE_GIF_FPS = 12         # playback speed
-  TIMELAPSE_EXPORT_SCALE = 1.0   # 1.0 = full size, <1.0 downscales
-  TIMELAPSE_GIF_OPTIMIZE = True  # optimize identical frames
+  TIMELAPSE_MAX_FRAMES = 2000    # frame limit
+  TIMELAPSE_GIF_FPS = 24         # playback speed
+  TIMELAPSE_EXPORT_SCALE = 1     # 1 = full size, below 1 downscales
+  TL_INTERVAL_MS = 80            # capture rate while the mouse is down
   ```
 
 ---
@@ -108,61 +128,71 @@ ASCII Painter includes an integrated **Timelapse Recorder** that captures each d
 ## Shortcuts
 
 ### Drawing
-- **Left Click** → Paint / Blur / Highlight  
-- **Right Click** → Erase / Erase Highlight  
-- **Middle Click** → Lighten  
-- **Ctrl + Middle Click** → Darken  
+- **Left Click** paint / blur / highlight  
+- **Right Click** erase / erase highlight  
+- **Middle Click** lighten, **Ctrl + Middle Click** darken  
+- **Alt + Click** color picker (takes the tone under the cursor)  
 
 ### Modes
-- **B** → Blur mode  
-- **L** → Line mode (toggle)  
-- **A** → Toggle line Anti-Alias  
-- **H** → Highlight mode  
-- **Shift (hold)** → Temporary Smooth / Blur  
+- **B** blur mode  
+- **L** line mode (click two points)  
+- **A** line anti-aliasing on/off  
+- **H** highlight mode  
+- **S** soft edge on/off  
+- **Shift (hold)** temporary blur  
+- **Esc** leave line or highlight mode  
 
 ### Tone & Brush
-- **-** → Darker tone  
-- **=** → Lighter tone  
-- **1..0** → Tone deciles  
-- **[ / ]** → Brush radius  
-- **Ctrl + Scroll Wheel** → Change tone  
-- **Shift + Scroll Wheel** → Opacity  
-- **X** → Toggle darkest / lightest tone  
+- **-** darker, **=** lighter  
+- **1..0** tone deciles  
+- **Shift + 1..0** pick a palette from `PAL.txt`  
+- **I** invert palette  
+- **X** toggle darkest / lightest tone  
+- **[ / ]** or **Mouse Wheel** brush radius  
+- **Ctrl + Wheel** tone, **Shift + Wheel** opacity  
 
-### Grid & Export
-- **G** → Toggle grid overlay  
-- **Ctrl+S** → Save TXT + PNG  
-- **Ctrl+C** → Copy as Markdown  
-- **Ctrl+Alt+C** → Copy as HTML `<pre>`  
-- **Ctrl+Shift+C** → Copy Fit (Bounding Box / Grid)  
-- **Ctrl+Shift+N** → Toggle NBSP spaces  
+### File & Export
+- **N** new canvas (asks Y/N, can be undone)  
+- **Ctrl+S** save TXT + PNG into `saves/`  
+- **Ctrl+Z** undo  
+- **Ctrl+C** copy as Markdown code block  
+- **Ctrl+Alt+C** copy as HTML `<pre>`  
+- **Ctrl+Shift+C** copy fit: crop to content (or grid), resample to the columns you choose  
+- **Ctrl+Alt+S** copy for Slack (Markdown with row aspect correction)  
+- **Ctrl+Shift+N** toggle non-breaking spaces (for web export)  
 
-### Timelapse
-- **T** → Start / Stop Timelapse Recording  
-- **Shift+T** → Export recorded Timelapse as GIF  
-
-### Overlay
-- **O** → Show / Hide overlay  
-- **Shift+O** → Load new overlay image  
-
-### UI & Control
-- **Shift+H** → Show/Hide Help overlay  
-- **Ctrl+Q** → Quit (with save prompt)  
+### Other
+- **G** grid on/off  
+- **O** show/hide overlay, **Shift+O** load overlay  
+- **T / Ctrl+E / Ctrl+T** timelapse (see above)  
+- **Shift+H** help overlay  
+- **Ctrl+Q** quit (asks to save first)  
 
 ---
 
 ## Configuration Constants
 
-Key variables you can tweak in the source:
+Key variables you can tweak at the top of the source:
 ```python
-OVERLAY_OPACITY = 0.35   # Overlay transparency (0.0 - 1.0)
-TEXT_LUMA = 0.72         # Default character brightness
-INITIAL_BRUSH_RADIUS = 1 # Starting brush radius
-UNDO_LIMIT = 64          # Max undo history steps
+OVERLAY_OPACITY = 0.35    # Overlay transparency (0.0 - 1.0)
+TEXT_LUMA = 0.72          # Default character brightness
+INITIAL_BRUSH_RADIUS = 1  # Starting brush radius
+UNDO_LIMIT = 64           # Max undo history steps
 TARGET_ASPECT = 4.0 / 3.0
 MAX_COLS = 80
 ROWS_OVERRIDE = 48
+AUTO_FIT_WINDOW = True    # shrink the window if the screen is too small
 ```
+
+---
+
+## Tests
+
+```
+pip install -r requirements.txt
+python tests/smoke_test.py
+```
+Runs the app without a window or a sound card and checks copy, save/load, undo, import, and the timelapse export.
 
 ---
 
@@ -178,5 +208,5 @@ Special thanks to everyone experimenting with digital ASCII art in modern creati
 
 ## License
 
-This project is released under the **MIT License**.  
-Feel free to modify, remix, and share — credit appreciated.
+Released under the **MIT License** (see `LICENSE`).  
+Feel free to modify, remix, and share. Credit is appreciated.

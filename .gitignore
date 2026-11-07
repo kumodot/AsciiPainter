@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+releases/
+*.spec
+
+# Your own work and local files
+saves/
+temp/
+_archive/
+crash.log
+docs/icon_sources/
+
+# Editors
+.vscode/
+.idea/

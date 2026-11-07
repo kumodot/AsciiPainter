@@ -1,4 +1,4 @@
-# ASCII Painter v0.92
+# ASCII Painter v0.93
 
 A lightweight ASCII art painting tool: paint with a mouse on a grid of monospaced characters, using a palette that goes from light to dark. The interface is ASCII too, on purpose.
 

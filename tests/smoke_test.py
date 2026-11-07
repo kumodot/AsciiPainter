@@ -265,10 +265,53 @@ def t_glyph_cache():
     pygame.quit()
 
 
+def t_tone_sphere():
+    app = new_app()
+    app._build_picker_grid()
+    g = app._picker_grid
+    rects = [r for r, _t in g.values()]
+    pr = app.picker_rect
+    check("sphere cells are inside the frame", all(pr.contains(r) for r in rects))
+    check("sphere cells never overlap", all(not a.colliderect(b) for i, a in enumerate(rects) for b in rects[i+1:]))
+    check("sphere cells are exact character cells",
+          all(r.w == app.pk_w and r.h == app.pk_h for r in rects))
+    left = min(r.left for r in rects) - pr.left; right = pr.right - max(r.right for r in rects)
+    top = min(r.top for r in rects) - pr.top; bottom = pr.bottom - max(r.bottom for r in rects)
+    check("sphere is centered and not cut", abs(left-right) <= app.pk_w + 1 and abs(top-bottom) <= app.pk_h + 1,
+          f"L{left} R{right} T{top} B{bottom}")
+    tones = [t for _r, t in g.values()]
+    check("sphere uses the full tonal range", min(tones) < 0.05 and max(tones) > 0.9, f"{min(tones):.2f}..{max(tones):.2f}")
+
+    # clicking a cell picks exactly that cell's tone and keeps the highlight on that cell
+    ok_val = ok_sel = True; n = 0
+    for pal_n in app.pal.order[:4]:
+        app.pal.set_index(pal_n)
+        app._picker_grid = None; app._build_picker_grid(); g = app._picker_grid
+        for key in list(g)[::9]:
+            rect, tone = g[key]
+            app.handle_picker_click(*rect.center)
+            app.draw_spherical_picker(app.surface)
+            n += 1
+            ok_val &= abs(app.current_value - tone) < 1e-9
+            ok_sel &= (app.picker_sel_rect == rect)
+    check(f"click picks the clicked cell tone ({n} cells, 4 palettes)", ok_val)
+    check("selection stays on the clicked cell", ok_sel)
+
+    # same click delivered through the real event loop
+    app.pal.set_index(app.pal.order[0]); app._picker_grid = None; app._build_picker_grid()
+    key = list(app._picker_grid)[len(app._picker_grid)//3]
+    rect, tone = app._picker_grid[key]
+    run_events(app, [pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(0, 0), button=1),
+                     pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(0, 0), button=1)], mouse_pos=rect.center)
+    check("click through the main loop picks the same tone", abs(app.current_value - tone) < 1e-9,
+          f"{app.current_value} vs {tone}")
+    pygame.quit()
+
+
 for fn in (t_startup_and_palette, t_bbox_and_copy_fit, t_ctrl_shift_c_does_not_crash, t_ctrl_alt_s_slack_copy,
            t_ctrl_s_saves_in_saves_dir, t_import_button_does_not_stick, t_save_load_roundtrip_and_short_lines,
            t_import_image_undo, t_new_canvas_undoable, t_timelapse,
-           t_plain_click_does_not_inject_timelapse_frames, t_line_mode_records_timelapse_frame, t_glyph_cache):
+           t_plain_click_does_not_inject_timelapse_frames, t_line_mode_records_timelapse_frame, t_glyph_cache, t_tone_sphere):
     guarded(fn.__name__, fn)
 
 failed = [n for n, ok in results if not ok]

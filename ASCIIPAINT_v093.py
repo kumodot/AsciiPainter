@@ -1,4 +1,4 @@
-# ASCII Painter - v0.92
+# ASCII Painter - v0.93
 
 import os, math, glob, time, random, webbrowser
 import pygame
@@ -42,7 +42,7 @@ def compute_rows_for_aspect(cols: int, char_w: int, char_h: int, target_aspect: 
     return max(1, int(round(rows_float)))
 
 # ====================== CONFIG ======================
-VERSION = "0.92"
+VERSION = "0.93"
 
 # Palette stored LIGHT -> DARK (left to right)
 DEFAULT_PALETTE = "$@%#*+=;:,. "
@@ -126,7 +126,8 @@ SIDEBAR_W, PICKER_SIZE, PALETTE_BAR_H, UI_MARGIN = 260, 160, 28, 16
 SIDEBAR_MIN_HEIGHT = 800
 IND_GAP_Y, IND_PAD_X, IND_PAD_Y = 6, 6, 3
 UI_EXTRA_VERTICAL = 0
-PICKER_Y_OFFSET_LINES = 1  # lift sphere inside its box by 1 text line
+PICKER_FONT_SIZE = 11     # font of the tone sphere: smaller than the main font = a more defined sphere
+PICKER_LIGHT = (-0.58, -0.58, 0.58)   # light direction of the sphere (upper-left, towards the viewer)
 
 HELP_DESC_SHIFT = 145  # pixels, tweak to taste
 HELP_BLOCK_XOFFSET = 10  # pixels, indent for HELP
@@ -1007,6 +1008,9 @@ class App:
         self.font_small = pygame.font.SysFont(FONT_NAME, max(10, FONT_SIZE-2))
         self.char_w, self.char_h = self.font.size("M")
         self.glyphs = GlyphCache(self.font)
+        self.font_picker = pygame.font.SysFont(FONT_NAME, PICKER_FONT_SIZE)
+        self.pk_w, self.pk_h = self.font_picker.size("M")      # character cell of the tone sphere
+        self.glyphs_picker = GlyphCache(self.font_picker)
         # Compute rows to target ~4:3 aspect with fixed MAX_COLS using actual font metrics
         global COLS, ROWS, WINDOW_SCALE
         ROWS = compute_rows_for_aspect(MAX_COLS, self.char_w, self.char_h, TARGET_ASPECT, FALLBACK_ROWS)
@@ -1138,6 +1142,9 @@ class App:
 
         # Picker caches
         self.picker_cells=[]; self.picker_sel_rect=None
+        self.picker_pick=None        # (col,row) of the sphere cell that is selected
+        self._picker_grid=None       # {(col,row): (rect, tone)}, built once
+        self._picker_center=(0, 0)
         # For horizontal palette bar we store a mapping idx->rect
         self.palette_items=[]   # list of (rect, idx)
         self.palette_rect_map={}
@@ -1921,33 +1928,77 @@ class App:
                 y = oy + int(j * self.canvas_px_h / gr)
                 pygame.draw.line(surf, GRID_COL, (0, y), (self.canvas_px_w, y), 1)
 
+    def _build_picker_grid(self):
+        """Character grid of the tone sphere, built once.
+        Every cell is a real character cell of the picker font (cells never overlap), the grid is centered
+        in the frame and the sphere always fits inside it. The tone of a cell is the shading at the
+        CENTER of the cell, and that same value is what a click on the cell picks."""
+        inner = self.picker_rect.inflate(-4, -4)
+        cw, chh = self.pk_w, self.pk_h
+        cols = max(1, inner.w // cw)
+        rows = max(1, inner.h // chh)
+        gx = inner.left + (inner.w - cols*cw)//2
+        gy = inner.top + (inner.h - rows*chh)//2
+        cx = gx + cols*cw/2.0
+        cy = gy + rows*chh/2.0
+        R = min(cols*cw, rows*chh)/2.0
+        Lx, Ly, Lz = PICKER_LIGHT
+        lmag = math.sqrt(Lx*Lx + Ly*Ly + Lz*Lz)
+        # "half lambert": the shadow side keeps a gradient instead of being clipped to black.
+        # lo/hi = value at the darkest visible limb / at the highlight, so the sphere uses the FULL tonal range.
+        lo = 0.5 - 0.5*math.hypot(Lx, Ly)/lmag
+        hi = 1.0
+        cells = {}
+        for r in range(rows):
+            for c in range(cols):
+                px = gx + (c + 0.5)*cw
+                py = gy + (r + 0.5)*chh
+                nx = (px - cx)/R
+                ny = (py - cy)/R
+                d2 = nx*nx + ny*ny
+                if d2 > 1.0:
+                    continue
+                nz = math.sqrt(max(0.0, 1.0 - d2))
+                ndl = (nx*Lx + ny*Ly + nz*Lz)/lmag              # -1..1
+                lit = (0.5 + 0.5*ndl - lo)/(hi - lo)             # 0..1 over the visible hemisphere
+                tone = clamp01(1.0 - lit)                        # 0 light .. 1 dark
+                cells[(c, r)] = (pygame.Rect(gx + c*cw, gy + r*chh, cw, chh), tone)
+        self._picker_grid = cells
+        self._picker_center = (cx, cy)
+
     def draw_spherical_picker(self,surf):
         pygame.draw.rect(surf,WHITE,self.picker_rect,1)
-        cx=self.picker_rect.centerx
-        cy=self.picker_rect.centery - PICKER_Y_OFFSET_LINES * self.char_h
-        R=(self.picker_rect.width - 4)//2
-        # Light vector (upper-left)
-        Lx, Ly, Lz = -0.58, -0.58, 0.58
-        step_x=max(1,self.char_w//2); step_y=self.char_h
-        self.picker_cells.clear()
-        for y in range(self.picker_rect.top+2, self.picker_rect.bottom-2, step_y):
-            for x in range(self.picker_rect.left+2, self.picker_rect.right-2, step_x):
-                nx=(x-cx)/R; ny=(y-cy)/R
-                d2=nx*nx+ny*ny
-                if d2<=1.0:
-                    nz=math.sqrt(max(0.0,1.0-d2))
-                    diffuse=max(0.0, float(nx*Lx + ny*Ly + nz*Lz))  # 0..1
-                    # Brighter => lighter tone (low value)
-                    t_disp = clamp01(1.0 - diffuse)    # 0 light .. 1 dark
-                    ch=self.pal.char_from_value(t_disp)
-                    surf.blit(self.glyphs.get(ch,GREY_TEXT),(x,y))
-                    self.picker_cells.append((pygame.Rect(x,y,self.char_w,self.char_h), t_disp))
-        # selection rect nearest to current tone
-        if self.picker_cells:
-            self.picker_sel_rect = min(self.picker_cells, key=lambda p: abs(p[1]-self.current_value))[0]
-        if self.picker_sel_rect:
-            pygame.draw.rect(surf, CYAN, self.picker_sel_rect, 2)
+        if self._picker_grid is None:
+            self._build_picker_grid()
+        grid = self._picker_grid
+        self.picker_cells = []
+        for key, (rect, tone) in grid.items():
+            ch = self.pal.char_from_value(tone)
+            if ch != ' ':
+                surf.blit(self.glyphs_picker.get(ch, GREY_TEXT), rect.topleft)
+            self.picker_cells.append((rect, tone, key))
 
+        # Selection: keep the clicked cell while it still shows the current tone. Otherwise take the cell
+        # with the nearest tone that is closest to where the selection was (it moves smoothly, it does
+        # not jump to the first cell of that tone).
+        cur = self.pal.idx_from_value(self.current_value)
+        sel = None
+        if self.picker_pick in grid:
+            if self.pal.idx_from_value(grid[self.picker_pick][1]) == cur:
+                sel = self.picker_pick
+        if sel is None:
+            if self.picker_sel_rect is not None:
+                ax, ay = self.picker_sel_rect.center
+            else:
+                ax, ay = self._picker_center
+            def score(item):
+                _key, (rect, tone) = item
+                return (abs(self.pal.idx_from_value(tone) - cur),
+                        (rect.centerx - ax)**2 + (rect.centery - ay)**2)
+            sel = min(grid.items(), key=score)[0]
+            self.picker_pick = sel
+        self.picker_sel_rect = grid[sel][0]
+        pygame.draw.rect(surf, CYAN, self.picker_sel_rect, 1)
 
     # ---- horizontal palette bar (DISPLAY ONLY order can be reversed) ----
     def draw_palette_bar(self,surf):
@@ -2198,21 +2249,14 @@ class App:
         pygame.draw.line(surf,CYAN,(x1,y1),(mx,my),1)
 
     # ---- picker math ----
-    def _sphere_value_from_point(self,mx,my):
-        """Return tone [0..1]. Inside sphere: tone = 1 - diffuse (bright->light).
-           Outside (inside frame): 1.0 (darkest)."""
-        cx=self.picker_rect.centerx
-        cy=self.picker_rect.centery - PICKER_Y_OFFSET_LINES * self.char_h
-        R=(self.picker_rect.width - 4)//2
-        nx=(mx-cx)/R; ny=(my-cy)/R
-        d2=nx*nx+ny*ny
-        if d2<=1.0:
-            Lx,Ly,Lz=-0.58,-0.58,0.58
-            nz=math.sqrt(max(0.0,1.0-d2))
-            diffuse=max(0.0, float(nx*Lx + ny*Ly + nz*Lz))
-            return clamp01(1.0 - diffuse)
-        else:
-            return 1.0
+    def _picker_cell_at(self, mx, my):
+        """(col,row) of the sphere cell under the point, or None."""
+        if self._picker_grid is None:
+            self._build_picker_grid()
+        for key, (rect, _tone) in self._picker_grid.items():
+            if rect.collidepoint(mx, my):
+                return key
+        return None
 
     def handle_picker_click(self, mx, my):
         # palette bar
@@ -2237,12 +2281,17 @@ class App:
 
         # sphere
         if self.picker_rect.collidepoint(mx, my):
-            self.current_value = self._sphere_value_from_point(mx, my)
-            if self.picker_cells:
-                self.picker_sel_rect = min(
-                    self.picker_cells,
-                    key=lambda p: abs(p[0].centerx - mx) + abs(p[0].centery - my)
-                )[0]
+            key = self._picker_cell_at(mx, my)
+            if key is not None:
+                # exactly the tone of the glyph you clicked, and the selection stays on that cell
+                self.current_value = self._picker_grid[key][1]
+                self.picker_pick = key
+                self.picker_sel_rect = self._picker_grid[key][0]
+            else:
+                # inside the frame but outside the sphere = darkest tone
+                self.current_value = 1.0
+                self.picker_pick = None
+                self.picker_sel_rect = pygame.Rect(mx, my, 1, 1)   # anchor: nearest darkest cell
             self.play_ui_click()  # <- som de clique
             return True
 

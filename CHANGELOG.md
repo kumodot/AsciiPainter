@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.93
+
+Tone sphere (gradient picker) fixes.
+
+### Fixed
+- **Tangled glyphs in the sphere.** The sphere drew characters at half-cell steps, so neighbours overlapped. It now uses a real character grid with a smaller font (`PICKER_FONT_SIZE = 11`), so every glyph has its own cell.
+- **Sphere not centered / cut at the top.** The grid is now centered in the frame and the sphere always fits inside it.
+- **Weak dark fall-off.** Shading is now "half lambert" normalised over the visible hemisphere, so the sphere uses the full tonal range, from the lightest highlight to a soft dark edge.
+- **Click did not pick the clicked character.** It recomputed the tone from the pixel and then highlighted another cell with a similar tone. A click now picks the exact tone of the clicked cell and the highlight stays on that cell.
+
+### Tests
+- `tests/smoke_test.py` has 8 new checks for the sphere (43 in total).
+
 ## v0.92
 
 Bug fix and cleanup release. The look and feel of the interface did not change.

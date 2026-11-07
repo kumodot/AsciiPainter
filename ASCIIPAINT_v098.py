@@ -1,4 +1,4 @@
-# ASCII Painter - v0.93
+# ASCII Painter - v0.97
 
 import os, math, glob, time, random, webbrowser
 import pygame
@@ -42,7 +42,7 @@ def compute_rows_for_aspect(cols: int, char_w: int, char_h: int, target_aspect: 
     return max(1, int(round(rows_float)))
 
 # ====================== CONFIG ======================
-VERSION = "0.93"
+VERSION = "0.98"
 
 # Palette stored LIGHT -> DARK (left to right)
 DEFAULT_PALETTE = "$@%#*+=;:,. "
@@ -126,11 +126,43 @@ SIDEBAR_W, PICKER_SIZE, PALETTE_BAR_H, UI_MARGIN = 260, 160, 28, 16
 SIDEBAR_MIN_HEIGHT = 800
 IND_GAP_Y, IND_PAD_X, IND_PAD_Y = 6, 6, 3
 UI_EXTRA_VERTICAL = 0
+# --- Pen pressure (Windows Ink, optional) ---
+PEN_MODES = ("OFF", "OPACITY", "SIZE", "BOTH")
+PEN_DEFAULT_MODE = "OPACITY"   # what pressure controls; the P key cycles it
+PEN_CURVE = 1.0                # pressure ** PEN_CURVE (above 1 = needs a harder press, below 1 = softer)
+PEN_MIN_SCALE = 0.05           # lightest pressure still leaves a trace
+
+# --- Smudge ---
+SMUDGE_GAIN = 0.8        # fraction of the ink under the brush that moves 1 cell per step at opacity 1.0
+SMUDGE_RGB  = (255, 170, 60)
+
+# --- Smart Brush / Smart Edge ---
+EDGES_FILE      = "EDGES.txt"   # characters used for borders (global, works with every palette)
+DEFAULT_EDGE_CHARS = "_-\u00af.,:;'\"`^\u00a8\u00aa\u00ba\u00ac|/\\()[]<>~!?iIl1jJL7rdbpqocunhkyZ4S$"
+EDGE_INK_MIN    = 0.10   # a cell with ink (1 - tone) above this belongs to the drawing
+EDGE_BG_MAX     = 0.20   # a neighbour with ink below this counts as empty background
+EDGE_UP_THRESH  = 0.62   # silhouette threshold when the cell grid is upsampled (higher = thinner border glyphs)
+EDGE_MASS_W     = 0.6    # weight of "same amount of ink" against "same shape" when matching glyphs
+UI_FONT_SIZE = 13             # sidebar text (buttons, info lines, GRID): smaller than the drawing font
+BRUSH_ROUND_IN_PIXELS = True   # compensate the tall character cells: a brush of radius r is a real circle on screen
 PICKER_FONT_SIZE = 11     # font of the tone sphere: smaller than the main font = a more defined sphere
 PICKER_LIGHT = (-0.58, -0.58, 0.58)   # light direction of the sphere (upper-left, towards the viewer)
 
 HELP_DESC_SHIFT = 145  # pixels, tweak to taste
 HELP_BLOCK_XOFFSET = 10  # pixels, indent for HELP
+HELP_FONT_SIZE = 12      # SHIFT+H list font (smaller than the canvas font so the list fits the sidebar)
+HELP_LINE_GAP = 1        # extra pixels between help lines
+HELP_COL_GAP = 10        # pixels between the command column and the description column
+
+# Dynamic canvas size (Ctrl+Arrows grow, Ctrl+Shift+Arrows shrink empty edges)
+CANVAS_GROW_COLS = 10        # cells added per Ctrl+Left/Right press
+CANVAS_GROW_ROWS = 6         # cells added per Ctrl+Up/Down press
+CANVAS_MIN_COLS, CANVAS_MIN_ROWS = 20, 12
+CANVAS_MAX_COLS, CANVAS_MAX_ROWS = 240, 160
+CANVAS_MAX_CELLS = 30000     # redraw cost grows with the cell count
+AUTO_GROW_ON_LOAD = True     # LOAD of a TXT bigger than the canvas grows the canvas (up to the limits)
+RESIZE_MIN_WINDOW_SCALE = 0.3  # lowest window scale AUTO_FIT_WINDOW may use for big canvases
+FLASH_MS = 1800
 
 # Brush & history
 INITIAL_BRUSH_RADIUS = 1
@@ -440,21 +472,222 @@ class PaletteManager:
         return self.value_from_idx(idx)
 
 
+# ====================== PEN PRESSURE ======================
+def _pen_structs():
+    """ctypes layouts of the Windows POINTER_INFO / POINTER_PEN_INFO structures (fixed-size fields, so the
+    layout is the same on any platform and can be checked by the tests)."""
+    import ctypes
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_int32), ("y", ctypes.c_int32)]
+    class POINTER_INFO(ctypes.Structure):
+        _fields_ = [("pointerType", ctypes.c_uint32), ("pointerId", ctypes.c_uint32), ("frameId", ctypes.c_uint32),
+                    ("pointerFlags", ctypes.c_uint32), ("sourceDevice", ctypes.c_void_p), ("hwndTarget", ctypes.c_void_p),
+                    ("ptPixelLocation", POINT), ("ptHimetricLocation", POINT),
+                    ("ptPixelLocationRaw", POINT), ("ptHimetricLocationRaw", POINT),
+                    ("dwTime", ctypes.c_uint32), ("historyCount", ctypes.c_uint32), ("InputData", ctypes.c_int32),
+                    ("dwKeyStates", ctypes.c_uint32), ("PerformanceCount", ctypes.c_uint64), ("ButtonChangeType", ctypes.c_int32)]
+    class POINTER_PEN_INFO(ctypes.Structure):
+        _fields_ = [("pointerInfo", POINTER_INFO), ("penFlags", ctypes.c_uint32), ("penMask", ctypes.c_uint32),
+                    ("pressure", ctypes.c_uint32), ("rotation", ctypes.c_uint32),
+                    ("tiltX", ctypes.c_int32), ("tiltY", ctypes.c_int32)]
+    return POINTER_INFO, POINTER_PEN_INFO
+
+
+class PenPressure:
+    """Optional pen pressure through Windows Ink (WM_POINTER messages). Windows only; anywhere else, or if
+    anything fails, it stays unavailable and the app behaves exactly like with a mouse.
+    `scale()` returns 1.0 whenever no pen is touching the tablet."""
+    WM_POINTERUPDATE, WM_POINTERDOWN, WM_POINTERUP = 0x0245, 0x0246, 0x0247
+    PT_PEN, FLAG_INCONTACT, MASK_PRESSURE = 3, 0x4, 0x1
+
+    def __init__(self):
+        self.available = False     # hook installed
+        self.seen = False          # a pen has been used at least once
+        self.pressure = 1.0        # 0..1 of the last pen sample
+        self.in_contact = False
+        self.mode = PEN_DEFAULT_MODE
+        self._old = None; self._cb = None; self._hwnd = None
+
+    def scale(self):
+        if self.mode == "OFF" or not self.in_contact: return 1.0
+        return max(PEN_MIN_SCALE, min(1.0, self.pressure) ** PEN_CURVE)
+
+    def cycle_mode(self):
+        self.mode = PEN_MODES[(PEN_MODES.index(self.mode) + 1) % len(PEN_MODES)]
+
+    def attach(self):
+        if sys.platform != "win32": return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = pygame.display.get_wm_info()["window"]
+            if self.available and self._hwnd == hwnd: return True      # already hooked on this window
+            POINTER_INFO, POINTER_PEN_INFO = _pen_structs()
+            user32 = ctypes.windll.user32
+            LRESULT = ctypes.c_ssize_t
+            WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+            setp = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+            setp.restype = ctypes.c_void_p; setp.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+            call = user32.CallWindowProcW
+            call.restype = LRESULT; call.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            user32.GetPointerType.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+            user32.GetPointerPenInfo.argtypes = [ctypes.c_uint32, ctypes.POINTER(POINTER_PEN_INFO)]
+            me = self
+            def proc(h, msg, wp, lp):
+                try:
+                    if msg in (me.WM_POINTERUPDATE, me.WM_POINTERDOWN, me.WM_POINTERUP):
+                        pid = wp & 0xFFFF
+                        ptype = ctypes.c_uint32()
+                        if user32.GetPointerType(pid, ctypes.byref(ptype)) and ptype.value == me.PT_PEN:
+                            info = POINTER_PEN_INFO()
+                            if user32.GetPointerPenInfo(pid, ctypes.byref(info)):
+                                contact = bool(info.pointerInfo.pointerFlags & me.FLAG_INCONTACT) and msg != me.WM_POINTERUP
+                                if info.penMask & me.MASK_PRESSURE:
+                                    me.pressure = min(1.0, info.pressure/1024.0)
+                                else:
+                                    me.pressure = 1.0 if contact else 0.0
+                                me.in_contact = contact; me.seen = True
+                        else:
+                            me.in_contact = False
+                except Exception:
+                    pass
+                return call(me._old, h, msg, wp, lp)
+            self._cb = WNDPROC(proc)                       # keep a reference or it gets garbage collected
+            GWLP_WNDPROC = -4
+            self._old = setp(hwnd, GWLP_WNDPROC, ctypes.cast(self._cb, ctypes.c_void_p))
+            self.available = bool(self._old); self._hwnd = hwnd
+        except Exception as e:
+            print("[PEN] pressure not available:", e)
+            self.available = False
+        return self.available
+
+
+# ====================== SMART EDGE ENGINE ======================
+def load_edge_chars():
+    """EDGES.txt: lines starting with # are comments, everything else is the list of border characters."""
+    p = find_asset(EDGES_FILE)
+    try:
+        if p and os.path.isfile(str(p)):
+            txt = "".join(l for l in open(str(p), encoding="utf-8").read().splitlines() if not l.lstrip().startswith("#"))
+            txt = "".join(ch for ch in txt if not ch.isspace())
+            if txt: return txt
+    except Exception as e:
+        print("[EDGES] could not read", p, e)
+    return DEFAULT_EDGE_CHARS
+
+
+def _blur2(a):
+    """Two passes of a [1 2 1] blur over the last two axes (a is N,H,W)."""
+    p = np.pad(a, ((0,0),(1,1),(1,1)), mode="edge")
+    h = (p[:,:,:-2] + 2*p[:,:,1:-1] + p[:,:,2:]) * 0.25
+    a = (h[:,:-2,:] + 2*h[:,1:-1,:] + h[:,2:,:]) * 0.25
+    p = np.pad(a, ((0,0),(1,1),(1,1)), mode="edge")
+    h = (p[:,:,:-2] + 2*p[:,:,1:-1] + p[:,:,2:]) * 0.25
+    return (h[:,:-2,:] + 2*h[:,1:-1,:] + h[:,2:,:]) * 0.25
+
+
+class EdgeEngine:
+    """Picks border characters by SHAPE. The tone grid is treated as a low-res picture: every border cell
+    is upsampled to pixels using its 3x3 neighbourhood, and the glyph of the edge set whose blurred ink
+    pattern matches that local silhouette best is chosen (works with any font)."""
+    def __init__(self, font, cw, ch, chars):
+        self.cw, self.ch = cw, ch
+        pats, ink, keep = [], [], []
+        for c in dict.fromkeys(chars):
+            if c.isspace(): continue
+            try:
+                surf = font.render(c, True, (255,255,255), (0,0,0))
+                a = pygame.surfarray.array3d(surf)[:,:,0].T.astype(np.float32) / 255.0
+            except Exception:
+                continue
+            out = np.zeros((ch, cw), np.float32)
+            h = min(ch, a.shape[0]); w = min(cw, a.shape[1]); out[:h,:w] = a[:h,:w]
+            if out.sum() <= 0: continue
+            keep.append(c); pats.append(out); ink.append(float(out.mean()))
+        self.chars = keep
+        self.codes = np.array([ord(c) for c in keep], dtype=np.int32)
+        G = np.stack(pats) if pats else np.zeros((0, ch, cw), np.float32)
+        Gb = _blur2(G) if len(G) else G
+        Gn = Gb / np.maximum(Gb.reshape(len(G), -1).max(axis=1), 1e-6)[:,None,None] if len(G) else Gb
+        self.Gn = Gn.reshape(len(G), -1).astype(np.float32)
+        self.Gn_sq = (self.Gn**2).sum(axis=1)
+        self.ink = np.array(ink, dtype=np.float32)
+        dense = [self.ink[i] for i, c in enumerate(keep) if c in "$@#8&MW"]
+        self.K = 1.0 / max(0.05, float(np.median(dense)) if dense else 0.3)    # ink of a fully covered cell
+        # tone of an edge glyph when a .txt is loaded (so it still counts as drawing)
+        self.tone_of = {c: 1.0 - float(np.clip(self.ink[i]*self.K, 0.4, 1.0)) for i, c in enumerate(keep)}
+        # pixel -> neighbour sampling for the bilinear upsample of one cell
+        py, px = np.mgrid[0:ch, 0:cw]
+        ux = (px + 0.5)/cw - 0.5; uy = (py + 0.5)/ch - 0.5
+        self.ox = np.where(ux >= 0, 1, -1).astype(np.int32); self.oy = np.where(uy >= 0, 1, -1).astype(np.int32)
+        self.tx = np.abs(ux).astype(np.float32); self.ty = np.abs(uy).astype(np.float32)
+
+    def codes_for(self, buf, ys, xs):
+        """ys,xs: arrays of cell coordinates. Returns int32 codes (0 = keep the normal tone character)."""
+        res = np.zeros(len(ys), dtype=np.int32)
+        if len(ys) == 0 or len(self.chars) == 0: return res
+        f = 1.0 - buf.astype(np.float32)
+        fp = np.pad(f, 2, mode="edge")                 # canvas border is not an edge
+        Y = ys + 2; X = xs + 2
+        c = fp[Y, X]
+        nmin = np.full(len(ys), 9.0, dtype=np.float32)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy or dx: nmin = np.minimum(nmin, fp[Y+dy, X+dx])
+        sel = np.nonzero((c > EDGE_INK_MIN) & (nmin < EDGE_BG_MAX))[0]
+        if len(sel) == 0: return res
+        Ys = Y[sel][:,None,None]; Xs = X[sel][:,None,None]
+        oy = self.oy[None]; ox = self.ox[None]; tx = self.tx[None]; ty = self.ty[None]
+        T = ((1-tx)*(1-ty)*fp[Ys, Xs] + tx*(1-ty)*fp[Ys, Xs+ox] +
+             (1-tx)*ty*fp[Ys+oy, Xs] + tx*ty*fp[Ys+oy, Xs+ox])
+        T = np.clip((T - EDGE_UP_THRESH)/0.3 + 0.5, 0.0, 1.0)         # soft threshold -> silhouette
+        cov = T.reshape(len(sel), -1).mean(axis=1)
+        ok = (cov > 0.03) & (cov < 0.93)                              # full cells keep their tone char
+        if not ok.any(): return res
+        sel = sel[ok]; T = T[ok]; cov = cov[ok]
+        Tb = _blur2(T).reshape(len(sel), -1)
+        Tn = Tb / np.maximum(Tb.max(axis=1), 1e-6)[:,None]
+        P = Tn.shape[1]
+        err = (self.Gn_sq[None,:] + (Tn**2).sum(axis=1)[:,None] - 2.0*(Tn @ self.Gn.T)) / P
+        err = err + EDGE_MASS_W*np.abs(self.K*self.ink[None,:] - cov[:,None])
+        res[sel] = self.codes[np.argmin(err, axis=1)]
+        return res
+
+
 # ====================== CANVAS ======================
 class ASCIICanvas:
     """buf: tone [0..1] (0 light, 1 dark). col: per-cell text luminance [0..1]."""
     def __init__(self, rows, cols):
         self.rows, self.cols = rows, cols
+        self.aspect = 1.0        # cell height / cell width, set by App (see BRUSH_ROUND_IN_PIXELS)
         self.buf = np.zeros((rows, cols), dtype=np.float32)               # tones
         self.col = np.full((rows, cols), TEXT_LUMA, dtype=np.float32)     # RGB luma
+        self.ov  = np.zeros((rows, cols), dtype=np.int32)                 # forced character (code point), 0 = none (use tone)
 
     def clear(self, tone_val=1.0, luma=TEXT_LUMA):
         # default clear = darkest
         self.buf[:] = tone_val
         self.col[:] = luma
+        self.ov[:] = 0
 
     def _blend_cell(self, x, y, target, a):
         self.buf[y, x] = self.buf[y, x]*(1.0-a) + target*a
+        self.ov[y, x] = 0
+
+    def disc_cells(self, cx, cy, r):
+        """Cells under a brush disc (same shape the brush paints). Returns (ys, xs)."""
+        if r <= 1:
+            if 0 <= cx < self.cols and 0 <= cy < self.rows:
+                return np.array([cy]), np.array([cx])
+            return np.array([], dtype=int), np.array([], dtype=int)
+        R = r - 0.5
+        ry = int(r/self.aspect) + 1
+        y0 = max(0, cy-ry); y1 = min(self.rows-1, cy+ry); x0 = max(0, cx-r); x1 = min(self.cols-1, cx+r)
+        if y1 < y0 or x1 < x0:
+            return np.array([], dtype=int), np.array([], dtype=int)
+        yy, xx = np.mgrid[y0:y1+1, x0:x1+1]
+        m = (xx-cx)**2 + ((yy-cy)*self.aspect)**2 <= R*R
+        return yy[m], xx[m]
 
     def _blend_luma_cell(self, x, y, target_l, a):
         self.col[y, x] = self.col[y, x]*(1.0-a) + target_l*a
@@ -467,9 +700,10 @@ class ASCIICanvas:
             return
         R = r - 0.5; R2 = R*R
         x0 = max(0, int(cx-r)); x1 = min(self.cols-1, int(cx+r))
-        y0 = max(0, int(cy-r)); y1 = min(self.rows-1, int(cy+r))
+        ry = r/self.aspect + 1
+        y0 = max(0, int(cy-ry)); y1 = min(self.rows-1, int(cy+ry))
         for y in range(y0, y1+1):
-            dy = y - cy
+            dy = (y - cy)*self.aspect
             for x in range(x0, x1+1):
                 dx = x - cx; d2 = dx*dx + dy*dy
                 if d2 <= R2:
@@ -487,13 +721,14 @@ class ASCIICanvas:
         # delta > 0 => darker; delta < 0 => lighter (since 1=dark)
         if r <= 1:
             if 0<=cx<self.cols and 0<=cy<self.rows:
-                self.buf[cy, cx] = clamp01(self.buf[cy, cx] + delta*a)
+                self.buf[cy, cx] = clamp01(self.buf[cy, cx] + delta*a); self.ov[cy, cx] = 0
             return
         R = r - 0.5; R2 = R*R
         x0 = max(0, int(cx-r)); x1 = min(self.cols-1, int(cx+r))
-        y0 = max(0, int(cy-r)); y1 = min(self.rows-1, int(cy+r))
+        ry = r/self.aspect + 1
+        y0 = max(0, int(cy-ry)); y1 = min(self.rows-1, int(cy+ry))
         for y in range(y0, y1+1):
-            dy = y - cy
+            dy = (y - cy)*self.aspect
             for x in range(x0, x1+1):
                 dx = x - cx; d2 = dx*dx + dy*dy
                 if d2 <= R2:
@@ -501,7 +736,35 @@ class ASCIICanvas:
                     if soft:
                         t = clamp01(1.0 - math.sqrt(d2)/max(1e-6, R))
                         scale = t**1.5
-                    self.buf[y, x] = clamp01(self.buf[y, x] + delta*a*scale)
+                    self.buf[y, x] = clamp01(self.buf[y, x] + delta*a*scale); self.ov[y, x] = 0
+
+    # ---- smudge: pushes ink (1 - tone) along a direction, conserving it ----
+    def smudge_step(self, cx, cy, r, dx, dy, strength):
+        """Moves part of the ink under the brush disc by one step (dx,dy in cells, each -1..1).
+        Ink is conserved: it piles up in front of the brush until a cell is full (tone 0); what does not fit
+        stays where it was, and nothing is pushed out of the canvas."""
+        if dx == 0 and dy == 0: return
+        ys, xs = self.disc_cells(cx, cy, r)
+        if len(ys) == 0: return
+        R = max(0.5, r - 0.5)
+        d = np.sqrt((xs - cx)**2 + ((ys - cy)*self.aspect)**2)
+        w = np.clip(1.0 - d/(R + 0.5), 0.0, 1.0)
+        w = w*w*(3.0 - 2.0*w)                                    # smooth falloff to the rim
+        ink = 1.0 - self.buf
+        move = ink[ys, xs]*w*float(strength)
+        ty = ys + dy; tx = xs + dx
+        ok = (ty >= 0) & (ty < self.rows) & (tx >= 0) & (tx < self.cols)
+        move = np.where(ok, move, 0.0).astype(np.float32)
+        tyc = np.clip(ty, 0, self.rows-1); txc = np.clip(tx, 0, self.cols-1)
+        room = np.maximum(1.0 - ink[tyc, txc], 0.0)               # a cell that is already full takes nothing
+        dep = np.minimum(move, room)                              # what does not fit simply stays where it was
+        new = ink.copy()
+        new[ys, xs] -= dep
+        np.add.at(new, (tyc, txc), dep)
+        new = np.clip(new, 0.0, 1.0)
+        for yy, xx in ((ys, xs), (tyc[ok], txc[ok])):
+            self.buf[yy, xx] = 1.0 - new[yy, xx]
+            self.ov[yy, xx] = 0
 
     # ---- luma discs (RGB) ----
     def luma_disc_blend(self, cx, cy, r, target_l, a, soft):
@@ -511,9 +774,10 @@ class ASCIICanvas:
             return
         R = r - 0.5; R2 = R*R
         x0 = max(0, int(cx-r)); x1 = min(self.cols-1, int(cx+r))
-        y0 = max(0, int(cy-r)); y1 = min(self.rows-1, int(cy+r))
+        ry = r/self.aspect + 1
+        y0 = max(0, int(cy-ry)); y1 = min(self.rows-1, int(cy+ry))
         for y in range(y0, y1+1):
-            dy = y - cy
+            dy = (y - cy)*self.aspect
             for x in range(x0, x1+1):
                 dx = x - cx; d2 = dx*dx + dy*dy
                 if d2 <= R2:
@@ -524,10 +788,11 @@ class ASCIICanvas:
                     self._blend_luma_cell(x, y, target_l, aa)
 
     # ---- blur ----
-    def blur_disc(self, cx, cy, radius):
+    def blur_disc(self, cx, cy, radius, alpha=1.0, soft=False):
         r = max(1, radius); R2 = (r-0.5)*(r-0.5)
         x0 = max(0, cx-r); x1 = min(self.cols-1, cx+r)
-        y0 = max(0, cy-r); y1 = min(self.rows-1, cy+r)
+        ry = int(math.ceil(r/self.aspect))
+        y0 = max(0, cy-ry); y1 = min(self.rows-1, cy+ry)
         patch = self.buf[y0:y1+1, x0:x1+1]
         if patch.size == 0: return
         k = np.array([[1,2,1],[2,4,2],[1,2,1]], dtype=np.float32) / 16.0
@@ -537,9 +802,15 @@ class ASCIICanvas:
                padded[2:,0:-2]*k[2,0] + padded[2:,1:-1]*k[2,1] + padded[2:,2:]*k[2,2])
         hh, ww = out.shape
         yy, xx = np.ogrid[0:hh, 0:ww]
-        dy = yy - (cy - y0); dx = xx - (cx - x0)
-        mask = (dx*dx + dy*dy) <= R2
-        patch[mask] = out[mask]
+        dy = (yy - (cy - y0))*self.aspect; dx = xx - (cx - x0)
+        d2 = dx*dx + dy*dy
+        mask = d2 <= R2
+        wgt = np.full(out.shape, float(alpha), dtype=np.float32)           # brush opacity
+        if soft:                                                           # same falloff as the paint brush
+            t = np.clip(1.0 - np.sqrt(d2)/max(1e-6, math.sqrt(R2)), 0.0, 1.0)
+            wgt = wgt*(t**1.5).astype(np.float32)
+        patch[mask] = patch[mask]*(1.0 - wgt[mask]) + out[mask]*wgt[mask]
+        self.ov[y0:y1+1, x0:x1+1][mask] = 0
 
     # ---- lines ----
     @staticmethod
@@ -567,12 +838,13 @@ class ASCIICanvas:
         r = float(max(1, radius))
         minx = max(0, int(min(x0, x1) - r - 1))
         maxx = min(self.cols-1, int(max(x0, x1) + r + 1))
-        miny = max(0, int(min(y0, y1) - r - 1))
-        maxy = min(self.rows-1, int(max(y0, y1) + r + 1))
+        A = self.aspect
+        miny = max(0, int(min(y0, y1) - r/A - 1))
+        maxy = min(self.rows-1, int(max(y0, y1) + r/A + 1))
         for y in range(miny, maxy+1):
             for x in range(minx, maxx+1):
-                cx, cy, _ = self._closest_point_to_segment(x, y, x0, y0, x1, y1)
-                dx, dy = (x - cx), (y - cy)
+                cx, cy, _ = self._closest_point_to_segment(x, y*A, x0, y0*A, x1, y1*A)
+                dx, dy = (x - cx), (y*A - cy)
                 d = math.hypot(dx, dy)
                 if soft:
                     base = clamp01(1.0 - d/r); cov  = base**1.5
@@ -1001,18 +1273,24 @@ class App:
         self.processing_ticks = 0
 
         self.overlay_image = None
+        self.overlay_src = None      # original overlay image (rescaled when the canvas is resized)
         self.overlay_visible = False
 
         # Fonts & surfaces
         self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
         self.font_small = pygame.font.SysFont(FONT_NAME, max(10, FONT_SIZE-2))
+        self.font_ui = pygame.font.SysFont(FONT_NAME, UI_FONT_SIZE)
+        self.font_help = pygame.font.SysFont(FONT_NAME, HELP_FONT_SIZE)
         self.char_w, self.char_h = self.font.size("M")
         self.glyphs = GlyphCache(self.font)
+        self.edge = EdgeEngine(self.font, self.char_w, self.char_h, load_edge_chars())
         self.font_picker = pygame.font.SysFont(FONT_NAME, PICKER_FONT_SIZE)
         self.pk_w, self.pk_h = self.font_picker.size("M")      # character cell of the tone sphere
         self.glyphs_picker = GlyphCache(self.font_picker)
         # Compute rows to target ~4:3 aspect with fixed MAX_COLS using actual font metrics
         global COLS, ROWS, WINDOW_SCALE
+        self.base_scale = WINDOW_SCALE          # configured scale, before auto-fit
+        self.flash_msg = ""; self.flash_until = 0
         ROWS = compute_rows_for_aspect(MAX_COLS, self.char_w, self.char_h, TARGET_ASPECT, FALLBACK_ROWS)
         COLS = MAX_COLS
 
@@ -1039,11 +1317,14 @@ class App:
         self.win_w = int(self.surface_w * WINDOW_SCALE)
         self.win_h = int(self.surface_h * WINDOW_SCALE)
         self.screen  = pygame.display.set_mode((self.win_w, self.win_h))
+        self.pen = PenPressure()
+        self.pen.attach()
         self.surface = pygame.Surface((self.surface_w, self.surface_h))
         self.canvas_offset_y = (self.surface_h - self.canvas_px_h) // 2
 
 
         self.canvas = ASCIICanvas(ROWS, COLS)
+        self.canvas.aspect = (self.char_h/float(self.char_w)) if BRUSH_ROUND_IN_PIXELS else 1.0
         # Start with darkest background by default
         self.canvas.clear(1.0, TEXT_LUMA)
 
@@ -1069,33 +1350,42 @@ class App:
         self.ind_labels = ["HLIGHT","SOFT","PAINT","BLUR","LINE","LINEAA"]
         self.ind_rects = []
 
-        # Buttons (paired)
-        self.btn_w = (SIDEBAR_W - 3*UI_MARGIN)//2
-        self.btn_h = 32
-        row1_y = self.palette_rect.bottom + UI_MARGIN
-        row2_y = row1_y + self.btn_h + UI_MARGIN
-        left_x  = self.canvas_px_w + UI_MARGIN
-        right_x = self.canvas_px_w + 2*UI_MARGIN + self.btn_w
-        self.new_btn    = pygame.Rect(left_x,  row1_y, self.btn_w, self.btn_h)
-        self.load_btn   = pygame.Rect(right_x, row1_y, self.btn_w, self.btn_h)
-        self.import_btn = pygame.Rect(left_x,  row2_y, self.btn_w, self.btn_h)
-        self.save_btn   = pygame.Rect(right_x, row2_y, self.btn_w, self.btn_h)
+        # Buttons: one compact row NEW LOAD IMPORT SAVE
+        BTN_GAP = 4
+        self.btn_h = 24
+        self.btn_w = (SIDEBAR_W - 2*UI_MARGIN - 3*BTN_GAP)//4
+        row1_y = self.palette_rect.bottom + UI_MARGIN//2
+        left_x = self.canvas_px_w + UI_MARGIN
+        step = self.btn_w + BTN_GAP
+        self.new_btn    = pygame.Rect(left_x,          row1_y, self.btn_w, self.btn_h)
+        self.load_btn   = pygame.Rect(left_x + step,   row1_y, self.btn_w, self.btn_h)
+        self.import_btn = pygame.Rect(left_x + 2*step, row1_y, self.btn_w, self.btn_h)
+        self.save_btn   = pygame.Rect(left_x + 3*step, row1_y, self.btn_w, self.btn_h)
         self.hovered_btn = None; self.pressed_btn = None
 
-        # Grid UI elements (below SAVE row)
-        grid_top = row2_y + self.btn_h + UI_MARGIN
-        checkbox_size = 18
+        # Smart tools row (toggle buttons)
+        row2_y = row1_y + self.btn_h + BTN_GAP
+        half_w = (SIDEBAR_W - 2*UI_MARGIN - BTN_GAP)//2
+        self.smart_btn = pygame.Rect(left_x, row2_y, half_w, self.btn_h)
+        self.edge_btn  = pygame.Rect(left_x + half_w + BTN_GAP, row2_y, half_w, self.btn_h)
+
+        row3_y = row2_y + self.btn_h + BTN_GAP
+        self.smudge_btn = pygame.Rect(left_x, row3_y, half_w, self.btn_h)
+
+        # Grid UI elements (below the button rows)
+        grid_top = row3_y + self.btn_h + UI_MARGIN//2
+        checkbox_size = 16
         self.grid_checkbox_rect = pygame.Rect(self.canvas_px_w+UI_MARGIN, grid_top, checkbox_size, checkbox_size)
         self.grid_label_rect = pygame.Rect(self.grid_checkbox_rect.right+8, grid_top, 80, checkbox_size)
 
-        y2 = grid_top + checkbox_size + 8
-        btn_w_small, btn_h_small = 22, 22
+        y2 = grid_top + checkbox_size + 4
+        btn_w_small, btn_h_small = 22, 20
         # Cols controls
         self.grid_cols_minus = pygame.Rect(self.canvas_px_w+UI_MARGIN, y2, btn_w_small, btn_h_small)
         self.grid_cols_plus  = pygame.Rect(self.grid_cols_minus.right+60, y2, btn_w_small, btn_h_small)
         self.grid_cols_val_rect = pygame.Rect(self.grid_cols_minus.right+8, y2, 50, btn_h_small)
         # Rows controls (next line)
-        y3 = y2 + btn_h_small + 6
+        y3 = y2 + btn_h_small + 4
         self.grid_rows_minus = pygame.Rect(self.canvas_px_w+UI_MARGIN, y3, btn_w_small, btn_h_small)
         self.grid_rows_plus  = pygame.Rect(self.grid_rows_minus.right+60, y3, btn_w_small, btn_h_small)
         self.grid_rows_val_rect = pygame.Rect(self.grid_rows_minus.right+8, y3, 50, btn_h_small)
@@ -1142,6 +1432,8 @@ class App:
 
         # Picker caches
         self.picker_cells=[]; self.picker_sel_rect=None
+        self.smudge_last=None        # last cell of the current smudge stroke
+        self.picker_drag=None        # "sphere" / "bar" while LMB is held on the tone picker
         self.picker_pick=None        # (col,row) of the sphere cell that is selected
         self._picker_grid=None       # {(col,row): (rect, tone)}, built once
         self._picker_center=(0, 0)
@@ -1166,15 +1458,21 @@ class App:
                 print("[OVERLAY] No image selected.")
                 return
             img = pygame.image.load(path).convert_alpha()
-            img = pygame.transform.smoothscale(img, (self.canvas_px_w, self.canvas_px_h))
-            alpha_val = int(clamp01(OVERLAY_OPACITY) * 255)
-            img.set_alpha(alpha_val)
-            self.overlay_image = img
+            self.overlay_src = img
+            self.overlay_image = None
+            self._fit_overlay()
             self.overlay_visible = True
             print(f"[OVERLAY] Loaded: {path}")
         except Exception as e:
             print("Overlay load error:", e)
 
+
+    def _fit_overlay(self):
+        """Scale the overlay source image to the current canvas size."""
+        if self.overlay_src is None: return
+        img = pygame.transform.smoothscale(self.overlay_src, (self.canvas_px_w, self.canvas_px_h))
+        img.set_alpha(int(clamp01(OVERLAY_OPACITY) * 255))
+        self.overlay_image = img
 
     def draw_overlay_if_needed(self, surf):
         """Draw the overlay image on top of the canvas if enabled."""
@@ -1430,7 +1728,7 @@ class App:
             v = float(self.canvas.buf[y, x])
             self.current_value = clamp01(v)
 
-    def push_undo(self): self.undo_stack.append((self.canvas.buf.copy(), self.canvas.col.copy()))
+    def push_undo(self): self.undo_stack.append((self.canvas.buf.copy(), self.canvas.col.copy(), self.canvas.ov.copy()))
     def begin_stroke_if_needed(self):
         if not self.stroke_started:
             self.push_undo(); self.stroke_started=True
@@ -1456,9 +1754,17 @@ class App:
             return "HLIGHT"
 
         # 4) Blur temporário com SHIFT ou modo BLUR
-        blur_now = (self.mode == "blur") or (self.mode == "paint" and self.shift_blur)
+        blur_now = self.blur_active()
         if blur_now:
             return "BLUR"
+
+        # 4b) Smart Brush / Smart Edge
+        if self.mode == "edge" or (self.mode == "smart" and bool(mods & pygame.KMOD_CTRL)):
+            return "SMART EDGE"
+        if self.mode == "smart":
+            return "SMART BRUSH"
+        if self.mode == "smudge":
+            return "SMUDGE"
 
         # 5) Botões do mouse
         if self.left_down:
@@ -1477,6 +1783,8 @@ class App:
         """Call after a blocking tkinter dialog: the dialog swallows the mouse-up, so the
         buttons would stay 'held' and the app would keep painting on its own."""
         self.left_down = self.right_down = self.mid_down = False
+        self.picker_drag = None
+        self.smudge_last = None
         self.pressed_btn = None
         self.snd_last_cell = None
         self.stroke_started = False
@@ -1540,8 +1848,149 @@ class App:
 
     def undo(self):
         if self.undo_stack:
-            buf,col=self.undo_stack.pop()
-            self.canvas.buf[:,:]=buf; self.canvas.col[:,:]=col
+            buf,col,ov=self.undo_stack.pop()
+            if buf.shape != self.canvas.buf.shape:       # the undone step changed the canvas size
+                self._apply_canvas_arrays(buf, col, ov)
+            else:
+                self.canvas.buf[:,:]=buf; self.canvas.col[:,:]=col; self.canvas.ov[:,:]=ov
+
+    # ---------- dynamic canvas size ----------
+    def flash(self, msg, ms=FLASH_MS):
+        self.flash_msg = msg; self.flash_until = pygame.time.get_ticks() + ms
+        print("[CANVAS]", msg)
+
+    def _fit_window(self, floor):
+        """Pick WINDOW_SCALE so the whole surface fits the desktop (never above the configured scale)."""
+        global WINDOW_SCALE
+        scale = self.base_scale
+        if AUTO_FIT_WINDOW:
+            try:
+                dw, dh = pygame.display.get_desktop_sizes()[0]
+                if dw > 0 and dh > 0:
+                    fit = min(1.0, (dh - 100) / float(self.surface_h), (dw - 20) / float(self.surface_w))
+                    if fit < 1.0: scale = max(floor, fit)
+            except Exception:
+                pass
+        WINDOW_SCALE = scale
+        self.win_w = int(self.surface_w * scale); self.win_h = int(self.surface_h * scale)
+
+    def _empty_mask(self, buf=None, ov=None):
+        """True where the cell shows nothing (blank character, no Smart Edge override)."""
+        buf = self.canvas.buf if buf is None else buf
+        ov = self.canvas.ov if ov is None else ov
+        n = self.pal.n - 1
+        return ((buf * n).round().clip(0, n).astype(np.int32) == n) & (ov == 0)
+
+    def _apply_canvas_arrays(self, buf, col, ov):
+        """Install new canvas arrays (any size) and rebuild everything that depends on the canvas size:
+        globals, window, surface, sidebar rects, overlay, picker caches."""
+        global COLS, ROWS
+        c = self.canvas
+        c.rows, c.cols = buf.shape
+        c.buf, c.col, c.ov = buf, col, ov
+        COLS, ROWS = c.cols, c.rows
+        old_w = self.canvas_px_w
+        self.canvas_px_w, self.canvas_px_h = self.char_w * COLS, self.char_h * ROWS
+        dx = self.canvas_px_w - old_w
+        self.surface_h = max(self.canvas_px_h, SIDEBAR_MIN_HEIGHT) + UI_EXTRA_VERTICAL
+        self.surface_w = self.canvas_px_w + SIDEBAR_W
+        self.canvas_offset_y = (self.surface_h - self.canvas_px_h) // 2
+        # the sidebar lives to the right of the canvas: slide every sidebar rect by the width change
+        seen = set()
+        for v in list(vars(self).values()):
+            if isinstance(v, pygame.Rect) and id(v) not in seen:
+                seen.add(id(v))
+                if v.x >= old_w: v.x += dx
+        self.sidebar_rect.height = self.surface_h
+        self.picker_cells = []; self.picker_sel_rect = None; self._picker_grid = None
+        self.palette_items.clear(); self.palette_rect_map.clear(); self.palette_sel_rect = None
+        self.ind_rects.clear(); self.help_click_zones.clear()
+        self.grid_cols, self.grid_rows = COLS, ROWS
+        self.pt1 = None; self.hover_cell = None; self.smudge_last = None
+        # window + drawing surface
+        self.surface = pygame.Surface((self.surface_w, self.surface_h))
+        self._fit_window(RESIZE_MIN_WINDOW_SCALE)
+        self.screen = pygame.display.set_mode((self.win_w, self.win_h))
+        if sys.platform == "win32":          # keep the (re-sized) window centred on the desktop
+            try:
+                import ctypes
+                u32 = ctypes.windll.user32
+                hwnd = pygame.display.get_wm_info()["window"]
+                x = max(0, (u32.GetSystemMetrics(0) - self.win_w) // 2); y = max(0, (u32.GetSystemMetrics(1) - self.win_h) // 2 - 20)
+                u32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004)       # SWP_NOSIZE | SWP_NOZORDER
+            except Exception:
+                pass
+        try: self.pen.attach()           # no-op unless the window handle changed
+        except Exception: pass
+        self._fit_overlay()
+        tl = getattr(self, "tl", None)
+        if tl is not None and not tl.frames: tl.target_rows = None      # first frame decides the T.LAPSE shape
+
+    def resize_canvas(self, left=0, top=0, right=0, bottom=0):
+        """Grow (+) or shrink (-) each side by that many cells. Content keeps its place; new cells are empty.
+        Shrinking only removes cells that are empty. Undoable. Returns True when the size changed."""
+        c = self.canvas
+        # shrinking: how much of each requested strip is really empty (counted from the outer edge)?
+        empty = self._empty_mask()
+        def free(strip_axis, from_start):
+            lines = empty.all(axis=strip_axis)              # axis=0 -> per column, axis=1 -> per row
+            if not from_start: lines = lines[::-1]
+            k = 0
+            for v in lines:
+                if not v: break
+                k += 1
+            return k
+        asked = {"left": left, "top": top, "right": right, "bottom": bottom}
+        refused = False
+        for side, axis, start in (("left", 0, True), ("right", 0, False), ("top", 1, True), ("bottom", 1, False)):
+            if asked[side] < 0:
+                want = -asked[side]; got = min(want, free(axis, start))
+                if got < want: refused = refused or got == 0
+                asked[side] = -got
+        left, top, right, bottom = asked["left"], asked["top"], asked["right"], asked["bottom"]
+        new_cols = c.cols + left + right; new_rows = c.rows + top + bottom
+        # keep inside the limits (trim the request instead of refusing when partly possible)
+        if new_cols < CANVAS_MIN_COLS:
+            need = CANVAS_MIN_COLS - new_cols
+            if right < 0: right += min(need, -right); need = CANVAS_MIN_COLS - (c.cols + left + right)
+            if left < 0 and need > 0: left += min(need, -left)
+            new_cols = c.cols + left + right
+        if new_rows < CANVAS_MIN_ROWS:
+            need = CANVAS_MIN_ROWS - new_rows
+            if bottom < 0: bottom += min(need, -bottom); need = CANVAS_MIN_ROWS - (c.rows + top + bottom)
+            if top < 0 and need > 0: top += min(need, -top)
+            new_rows = c.rows + top + bottom
+        grow = (left > 0 or right > 0 or top > 0 or bottom > 0)
+        if grow and (new_cols > CANVAS_MAX_COLS or new_rows > CANVAS_MAX_ROWS or new_cols * new_rows > CANVAS_MAX_CELLS):
+            self.flash(f"CANVAS LIMIT: {CANVAS_MAX_COLS}x{CANVAS_MAX_ROWS} MAX ({CANVAS_MAX_CELLS} CELLS)")
+            return False
+        if new_cols == c.cols and new_rows == c.rows:
+            self.flash("EDGE NOT EMPTY: NOTHING REMOVED" if refused else "CANVAS AT MINIMUM SIZE")
+            return False
+        old_cols, old_rows = c.cols, c.rows
+        self.push_undo()                                   # snapshot (with the old shape) for Ctrl+Z
+        dark = self.pal.value_from_idx(self.pal.n - 1)
+        nb = np.full((new_rows, new_cols), dark, dtype=np.float32)
+        nc = np.full((new_rows, new_cols), TEXT_LUMA, dtype=np.float32)
+        no = np.zeros((new_rows, new_cols), dtype=np.int32)
+        sx0 = max(0, -left); sx1 = min(old_cols, new_cols - left)
+        sy0 = max(0, -top);  sy1 = min(old_rows, new_rows - top)
+        if sx1 > sx0 and sy1 > sy0:
+            for dst, src in ((nb, c.buf), (nc, c.col), (no, c.ov)):
+                dst[sy0 + top:sy1 + top, sx0 + left:sx1 + left] = src[sy0:sy1, sx0:sx1]
+        self._apply_canvas_arrays(nb, nc, no)
+        self.flash(f"CANVAS {new_cols}x{new_rows}")
+        return True
+
+    def canvas_resize_key(self, key, shrink):
+        """Ctrl+Arrow grows that side, Ctrl+Shift+Arrow removes up to one step of EMPTY cells from that side."""
+        if self.stroke_started or self.left_down or self.right_down or self.mid_down: return
+        dc, dr = CANVAS_GROW_COLS, CANVAS_GROW_ROWS
+        if shrink: dc, dr = -dc, -dr
+        if   key == pygame.K_LEFT:  self.resize_canvas(left=dc)
+        elif key == pygame.K_RIGHT: self.resize_canvas(right=dc)
+        elif key == pygame.K_UP:    self.resize_canvas(top=dr)
+        elif key == pygame.K_DOWN:  self.resize_canvas(bottom=dr)
     def mouse_to_cell(self,mx,my):
         oy = getattr(self, 'canvas_offset_y', 0)
         if (mx < 0) or (mx >= self.canvas_px_w) or (my < oy) or (my >= oy + self.canvas_px_h):
@@ -1574,22 +2023,23 @@ class App:
         return False
 
 
+    def row_chars(self, r):
+        """Characters of canvas row r: tone characters, with Smart Edge overrides on top."""
+        n=self.pal.n-1
+        idx=(self.canvas.buf[r,:]*n).round().clip(0,n).astype(np.int32).tolist()
+        ov=self.canvas.ov[r,:].tolist(); chars=self.pal.chars
+        return [chr(o) if o else chars[i] for i,o in zip(idx,ov)]
     def build_ascii_lines(self):
-        n=self.pal.n-1; lines=[]
-        for r in range(ROWS):
-            row=(self.canvas.buf[r,:]*n).round().clip(0,n).astype(np.int32)
-            lines.append("".join(self.pal.chars[i] for i in row))
-        return lines
+        return ["".join(self.row_chars(r)) for r in range(ROWS)]
     def save_txt(self,path):
         with open(path,"w",encoding="utf-8") as f:
             f.write("\n".join(self.build_ascii_lines()))
     def save_png(self,path):
         temp=pygame.Surface((self.canvas_px_w,self.canvas_px_h)); temp.fill(BLACK)
-        n=self.pal.n-1
         for r in range(ROWS):
-            row=(self.canvas.buf[r,:]*n).round().clip(0,n).astype(np.int32)
+            row=self.row_chars(r)
             for c in range(COLS):
-                ch=self.pal.chars[row[c]]
+                ch=row[c]
                 if ch==' ': continue
                 col=luma_to_rgb(self.canvas.col[r,c])
                 temp.blit(self.glyphs.get(ch,col),(c*self.char_w,r*self.char_h))
@@ -1606,13 +2056,30 @@ class App:
         dark_idx=self.pal.n-1                        # last palette char = space = darkest tone
         dark_val=self.pal.value_from_idx(dark_idx)
         self.push_undo()
+        if AUTO_GROW_ON_LOAD:
+            need_r=min(CANVAS_MAX_ROWS,len(lines)); need_c=min(CANVAS_MAX_COLS,max([len(l.rstrip()) for l in lines] or [0]))
+            new_r=max(self.canvas.rows,need_r); new_c=max(self.canvas.cols,need_c)
+            if new_r*new_c>CANVAS_MAX_CELLS:
+                new_r,new_c=self.canvas.rows,self.canvas.cols
+            if (new_r,new_c)!=(self.canvas.rows,self.canvas.cols):
+                self._apply_canvas_arrays(np.full((new_r,new_c),dark_val,dtype=np.float32),
+                                          np.full((new_r,new_c),TEXT_LUMA,dtype=np.float32),
+                                          np.zeros((new_r,new_c),dtype=np.int32))
+                self.flash(f"CANVAS {new_c}x{new_r} (FITS FILE)")
         self.canvas.buf[:,:]=dark_val                # whatever the file does not cover stays empty
+        self.canvas.ov[:,:]=0
         rows=min(ROWS,len(lines))
         for r in range(rows):
             line=lines[r].replace("\u00a0"," "); cols=min(COLS,len(line))
             for c in range(cols):
-                idx=char_to_idx.get(line[c],dark_idx)    # char not in the palette -> empty
-                self.canvas.buf[r,c]=self.pal.value_from_idx(idx)
+                ch=line[c]
+                idx=char_to_idx.get(ch)
+                if idx is not None:
+                    self.canvas.buf[r,c]=self.pal.value_from_idx(idx)
+                elif ch in self.edge.tone_of:            # an edge-set character: keep it as a Smart Edge override
+                    self.canvas.buf[r,c]=self.edge.tone_of[ch]; self.canvas.ov[r,c]=ord(ch)
+                else:
+                    self.canvas.buf[r,c]=dark_val        # char not in the palette or edge set -> empty
         self.canvas.col[:,:]=TEXT_LUMA
     def import_image_to_canvas(self,path):
         try:
@@ -1623,6 +2090,7 @@ class App:
             y=(0.2126*arr[:,:,0]+0.7152*arr[:,:,1]+0.0722*arr[:,:,2])/255.0
             self.push_undo()
             self.canvas.buf[:,:]=np.clip((1.0 - y).T,0.0,1.0); del arr
+            self.canvas.ov[:,:]=0
             self.canvas.col[:,:]=TEXT_LUMA
         except Exception as e: print("Import error:",e)
 
@@ -1661,7 +2129,7 @@ class App:
 
     def copy_current_as(self, mode="markdown"):
         """Copy current canvas as text (markdown/plain/html)."""
-        lines = ascii_lines_from_buf(self.canvas.buf, self.pal.chars)
+        lines = self.build_ascii_lines()
         lines = maybe_nbsp(lines, COPY_USE_NBSP and mode != "markdown")  # md preserves spaces
         if mode == "markdown":
             txt = wrap_as_markdown(lines)
@@ -1834,7 +2302,13 @@ class App:
         pygame.draw.rect(surf,fill,rect,0,border_radius=5)
         pygame.draw.rect(surf,WHITE if enabled else GREY,rect,2,border_radius=5)
         color=WHITE if enabled else GREY
-        t=self.font.render(label,True,color)
+        t=self.font_ui.render(label,True,color)
+        surf.blit(t,(rect.x+(rect.w-t.get_width())//2, rect.y+(rect.h-t.get_height())//2))
+
+    def draw_toggle_button(self,surf,rect,label,active,color=CYAN):
+        pygame.draw.rect(surf,GREY10,rect,0,border_radius=5)
+        pygame.draw.rect(surf,color if active else GREY50,rect,2 if active else 1,border_radius=5)
+        t=self.font_ui.render(label,True,color if active else GREY50)
         surf.blit(t,(rect.x+(rect.w-t.get_width())//2, rect.y+(rect.h-t.get_height())//2))
 
     def _indicator_box_size(self):
@@ -1842,7 +2316,7 @@ class App:
         return ts.get_width()+2*IND_PAD_X, ts.get_height()+2*IND_PAD_Y
 
     def draw_mode_stack(self,surf):
-        blur_effective=(self.mode=="blur") or (self.mode=="paint" and self.shift_blur)
+        blur_effective=(self.mode=="blur") or (self.mode in ("paint","smart") and self.shift_blur)
         states={"HLIGHT":(self.mode=="hlight"),
                 "SOFT":self.soft_edge,
                 "PAINT":(self.mode=="paint" and not self.shift_blur),
@@ -1874,7 +2348,7 @@ class App:
         if self.grid_enabled:
             inner = self.grid_checkbox_rect.inflate(-6, -6)
             pygame.draw.rect(surf, WHITE, inner, 0)
-        label = self.font.render('GRID (cells)', True, WHITE if self.grid_enabled else GREY)
+        label = self.font_ui.render('GRID (cells)', True, WHITE if self.grid_enabled else GREY)
         surf.blit(label, (self.grid_label_rect.x, self.grid_label_rect.y))
 
         # --- coords indicator (cell under cursor) ---
@@ -2036,6 +2510,7 @@ class App:
             f"PAL: {self.pal.display_name}",
             f"TONE: {self.current_value:.2f}",
             f"CHAR: '{ch}'",
+            f"CANVAS: {COLS}x{ROWS}",
             f"RADIUS: {self.brush_radius}",
             f"OPACITY: {self.brush_alpha:.2f}",
             f"SOUND: {'ON' if (self.sound_enabled and self.wav_variants) else 'OFF'}",
@@ -2043,6 +2518,8 @@ class App:
             f"COPY: {COPY_DEFAULT_MODE.upper()}",
             f"NBSP: {'ON' if COPY_USE_NBSP else 'OFF'}",
         ]
+        if self.pen.available:        # only shown when the pen hook is installed (Windows)
+            infos.append(f"PEN: {self.pen.mode}" + (f" {self.pen.pressure:.2f}" if self.pen.in_contact else ("" if self.pen.seen else " (no pen yet)")))
         
         # --- Processing indicator (centered version) ---
         if self.processing_active:
@@ -2052,10 +2529,10 @@ class App:
                 y = (self.surface.get_height() - msg.get_height()) // 2
                 surf.blit(msg, (x, y))
 
-        y=self.grid_rows_val_rect.bottom+UI_MARGIN
+        y=self.grid_rows_val_rect.bottom+UI_MARGIN//2
         for s in infos:
-            surf.blit(self.font.render(s,True,GREY),(self.canvas_px_w+UI_MARGIN,y))
-            y+=self.char_h+2
+            surf.blit(self.font_ui.render(s,True,GREY),(self.canvas_px_w+UI_MARGIN,y))
+            y+=self.font_ui.get_height()+1
         # Bottom-right help hint
         hint = self.font_small.render("SHIFT+H for HELP", True, GREY_TEXT)
         hx = self.canvas_px_w + SIDEBAR_W - UI_MARGIN - hint.get_width()
@@ -2103,40 +2580,49 @@ class App:
             ("]", "RADIUS INC"),
             ("SHFT+WHEEL","OPACITY"),
             ("B","BLUR MODE"),
+            ("M","SMART BRUSH"),
+            ("E","SMART EDGE"),
+            ("CTRL+LMB","SMART EDGE (SMART)"),
+            ("D","SMUDGE (OPAC=FORCE)"),
+            ("P","PEN PRESSURE MODE"),
             ("L","LINE MODE"),
             ("A","LINE AA ON/OFF"),
             ("G","GRID ON/OFF"),
+            ("CTRL+ARROWS","GROW CANVAS"),
+            ("CTRL+SHFT+ARR","SHRINK (EMPTY)"),
         ]
         x_cmd=self.canvas_px_w+UI_MARGIN - HELP_BLOCK_XOFFSET
-        x_desc=x_cmd+HELP_DESC_SHIFT-3*self.char_w
+        fh=self.font_help; lh=fh.get_height()+HELP_LINE_GAP
+        x_desc=x_cmd+max(fh.size(c)[0] for c,_ in items)+HELP_COL_GAP
         y=UI_MARGIN
-        title=self.font.render("SHORTCUTS",True,WHITE)
-        surf.blit(title,(x_cmd,y)); y+=self.char_h+4
+        title=fh.render("SHORTCUTS",True,WHITE)
+        surf.blit(title,(x_cmd,y)); y+=lh+4
         for cmd,desc in items:
-            tcmd=self.font.render(cmd,True,WHITE)
-            tdesc=self.font.render(desc,True,GREY_DESC)
+            tcmd=fh.render(cmd,True,WHITE)
+            tdesc=fh.render(desc,True,GREY_DESC)
             surf.blit(tcmd,(x_cmd,y)); surf.blit(tdesc,(x_desc,y))
-            y+=self.char_h+2
+            y+=lh
+        list_bottom=y
         # credits + links
         cx=self.canvas_px_w+SIDEBAR_W//2
         insp1="Inspired by the Art of"
         link_vagon="@vagonparovoz"
-        t1=self.font.render(insp1,True,GREY_TEXT)
-        t_vagon=self.font.render(link_vagon,True,CYAN)
-        link_me="@msouza3d"; t_me=self.font.render(link_me,True,CYAN)
-        tag_suffix=f" - 2025 - V{VERSION}"; t_suffix=self.font.render(tag_suffix,True,GREY_TEXT)
+        t1=fh.render(insp1,True,GREY_TEXT)
+        t_vagon=fh.render(link_vagon,True,CYAN)
+        link_me="@msouza3d"; t_me=fh.render(link_me,True,CYAN)
+        tag_suffix=f" - 2025 - V{VERSION}"; t_suffix=fh.render(tag_suffix,True,GREY_TEXT)
         k1="BUY ME A COFFEE :"; k2="https://ko-fi.com/msouza3d"
-        tk1=self.font.render(k1,True,GREY_TEXT); tk2=self.font.render(k2,True,CYAN)
+        tk1=fh.render(k1,True,GREY_TEXT); tk2=fh.render(k2,True,CYAN)
         tag_y=self.surface.get_height()-UI_MARGIN - t_me.get_height()
         total_tag_w=t_me.get_width()+t_suffix.get_width(); tag_x=cx-total_tag_w//2
-        insp_y_top=(tag_y - 6 - t_vagon.get_height() - 2*self.char_h
+        insp_y_top=(tag_y - 6 - t_vagon.get_height() - 2*lh
                     - tk1.get_height() - tk2.get_height() - 4 - t1.get_height())
         surf.blit(t1,(cx - t1.get_width()//2, insp_y_top))
         r_vagon=pygame.Rect(cx - t_vagon.get_width()//2, insp_y_top + t1.get_height() + 4,
                             t_vagon.get_width(), t_vagon.get_height())
         surf.blit(t_vagon,r_vagon.topleft)
         mid_y=tag_y - 6 - t_vagon.get_height()
-        surf.blit(tk1,(cx - tk1.get_width()//2, mid_y - tk1.get_height() - self.char_h))
+        surf.blit(tk1,(cx - tk1.get_width()//2, mid_y - tk1.get_height() - lh))
         r_k2=pygame.Rect(cx - tk2.get_width()//2, mid_y - tk2.get_height(), tk2.get_width(), tk2.get_height())
         surf.blit(tk2,r_k2.topleft)
         r_me=pygame.Rect(tag_x, tag_y, t_me.get_width(), t_me.get_height())
@@ -2145,6 +2631,7 @@ class App:
             over=any(r.collidepoint(mx,my) for r in (r_k2,r_vagon,r_me))
             try: pygame.mouse.set_cursor(self.cursor_hand if over else self.cursor_arrow)
             except Exception: pass
+        self.help_list_bottom=list_bottom
         self.help_click_zones=[(r_k2,"https://ko-fi.com/msouza3d"),
                                (r_vagon,"https://www.instagram.com/vagonparovoz/"),
                                (r_me,"https://www.instagram.com/msouza3d/")]
@@ -2174,14 +2661,16 @@ class App:
         if r==1:
             if glyph_char: surf.blit(glyph,(cx*self.char_w, base_y + cy*self.char_h))
             return
-        rmin2=(r-1.0)*(r-1.0); rmax2=float(r)*float(r)
-        x0=max(0,cx-r); x1=min(COLS-1,cx+r)
-        y0=max(0,cy-r); y1=min(ROWS-1,cy+r)
-        for y in range(y0,y1+1):
-            dy2=(y-cy)*(y-cy)
-            for x in range(x0,x1+1):
-                d2=(x-cx)*(x-cx)+dy2
-                if (rmin2<=d2<=rmax2) and glyph_char:
+        A=self.canvas.aspect
+        r2=(r-0.5)*(r-0.5)     # same disc the brush paints
+        def inside(x,y):
+            dx=x-cx; dy=(y-cy)*A
+            return dx*dx+dy*dy<=r2
+        # outline of the brush disc: inside cells that touch the outside (1 cell thick, no gaps)
+        ry=int(math.ceil(r/A))
+        for y in range(max(0,cy-ry),min(ROWS-1,cy+ry)+1):
+            for x in range(max(0,cx-r),min(COLS-1,cx+r)+1):
+                if glyph_char and inside(x,y) and not (inside(x-1,y) and inside(x+1,y) and inside(x,y-1) and inside(x,y+1)):
                     surf.blit(glyph,(x*self.char_w, base_y + y*self.char_h))
 
     # ---- full redraw ----
@@ -2201,11 +2690,13 @@ class App:
         lum_all=(np.clip(self.canvas.col,0.0,1.0).astype(np.float64)*255).astype(np.int32)
         chars=self.pal.chars; get_glyph=self.glyphs.get
         cw=self.char_w; chh=self.char_h
+        ov_all=self.canvas.ov
         for r in range(ROWS):
-            idx_row=idx_all[r].tolist(); lum_row=lum_all[r].tolist()
+            idx_row=idx_all[r].tolist(); lum_row=lum_all[r].tolist(); ov_row=ov_all[r].tolist()
             y=base_y + r*chh
             for c in range(COLS):
-                ch=chars[idx_row[c]]
+                o=ov_row[c]
+                ch=chr(o) if o else chars[idx_row[c]]
                 if ch==' ': continue            # nothing to draw on the black background
                 v=lum_row[c]
                 surf.blit(get_glyph(ch,(v,v,v)),(c*cw, y))
@@ -2232,14 +2723,24 @@ class App:
         self.draw_button(surf,self.save_btn,"SAVE",
                          hovered=(self.hovered_btn=="SAVE"),pressed=(self.pressed_btn=="SAVE"))
 
+        self.draw_toggle_button(surf, self.smart_btn, "SMART [M]", self.mode=="smart")
+        self.draw_toggle_button(surf, self.edge_btn,  "EDGE [E]", self.mode=="edge")
+        self.draw_toggle_button(surf, self.smudge_btn, "SMUDGE [D]", self.mode=="smudge", SMUDGE_RGB)
+
         self.draw_tool_info(surf)
 
         # ring
         if self.hover_cell:
-            ring_col = RED if (self.mode=="blur" or (self.mode=="paint" and self.shift_blur)) \
-                       else (HL_RGB if self.mode=="hlight" else WHITE)
+            edge_now = (self.mode=="edge") or (self.mode=="smart" and bool(pygame.key.get_mods() & pygame.KMOD_CTRL))
+            ring_col = RED if self.blur_active() else (HL_RGB if self.mode=="hlight" else (CYAN if edge_now else (SMUDGE_RGB if self.mode=="smudge" else WHITE)))
             self.draw_brush_ring(surf, ring_col, ticks)
         self.draw_help_overlay(surf, mx, my, ticks)
+        if self.flash_msg and ticks < self.flash_until:
+            t=self.font.render(self.flash_msg,True,CYAN)
+            r=pygame.Rect(0,0,t.get_width()+16,t.get_height()+8)
+            r.midbottom=(self.canvas_px_w//2, base_y+self.canvas_px_h-self.char_h)
+            pygame.draw.rect(surf,BLACK,r); pygame.draw.rect(surf,CYAN,r,1)
+            surf.blit(t,(r.x+8,r.y+4))
 
     def draw_preview_line(self,surf,mx,my):
         if self.mode!="line" or self.pt1 is None: return
@@ -2258,6 +2759,21 @@ class App:
                 return key
         return None
 
+    def picker_drag_update(self, mx, my):
+        """LMB held on the sphere / palette bar: follow the mouse. Outside the sphere it clamps to the
+        nearest cell instead of jumping to the darkest tone. No click sound while dragging."""
+        if self.picker_drag == "sphere":
+            if self._picker_grid is None:
+                self._build_picker_grid()
+            key = min(self._picker_grid, key=lambda k: (self._picker_grid[k][0].centerx - mx)**2 +
+                                                       (self._picker_grid[k][0].centery - my)**2)
+            self.current_value = self._picker_grid[key][1]
+            self.picker_pick = key
+            self.picker_sel_rect = self._picker_grid[key][0]
+        elif self.picker_drag == "bar" and self.palette_items:
+            rect, idx = min(self.palette_items, key=lambda it: abs(it[0].centerx - mx))
+            self.current_value = self.pal.value_from_idx(idx)
+
     def handle_picker_click(self, mx, my):
         # palette bar
         if self.palette_rect.collidepoint(mx, my):
@@ -2266,6 +2782,7 @@ class App:
                 rect, idx = min(self.palette_items, key=lambda it: abs(it[0].centerx - mx))
                 self.current_value = self.pal.value_from_idx(idx)
                 self.play_ui_click()  # <- som de clique
+                self._picker_grabbed = "bar"
                 return True
             # fallback: compute index from position
             n = self.pal.n
@@ -2293,6 +2810,7 @@ class App:
                 self.picker_pick = None
                 self.picker_sel_rect = pygame.Rect(mx, my, 1, 1)   # anchor: nearest darkest cell
             self.play_ui_click()  # <- som de clique
+            self._picker_grabbed = "sphere"
             return True
 
         return False
@@ -2356,6 +2874,7 @@ class App:
         if not cell: return
         ctrl=bool(pygame.key.get_mods() & pygame.KMOD_CTRL)
         x,y=cell
+        r_eff=self.eff_radius(); a_eff=self.eff_alpha()
 
         if self.mode=="line": return
 
@@ -2363,38 +2882,106 @@ class App:
         if self.mode=="hlight":
             if self.left_down:
                 self.begin_stroke_if_needed()
-                self.canvas.luma_disc_blend(x,y,self.brush_radius,HLIGHT_LUMA,1.0,self.soft_edge)
-                ## if self.brush_radius==1: self.play_brush_tick()
+                self.canvas.luma_disc_blend(x,y,r_eff,HLIGHT_LUMA,1.0,self.soft_edge)
+                ## if r_eff==1: self.play_brush_tick()
             elif self.right_down:
                 self.begin_stroke_if_needed()
-                self.canvas.luma_disc_blend(x,y,self.brush_radius,HL_ERASE_LUMA,1.0,self.soft_edge)
-                ##if self.brush_radius==1: self.play_brush_tick()
+                self.canvas.luma_disc_blend(x,y,r_eff,HL_ERASE_LUMA,1.0,self.soft_edge)
+                ##if r_eff==1: self.play_brush_tick()
             return
 
-        blur_now=(self.mode=="blur") or (self.mode=="paint" and self.shift_blur)
+        if self.mode=="smudge" and self.left_down:
+            self.begin_stroke_if_needed()
+            if self.smudge_last is not None and self.smudge_last != cell:
+                self.smudge_move(self.smudge_last[0], self.smudge_last[1], x, y)
+            self.smudge_last = (x, y)
+            return
+
+        blur_now=self.blur_active()
+        smart = (self.mode=="smart")
+        edge_only = (self.mode=="edge") or (smart and ctrl)     # SMART EDGE: only swap characters, no painting
 
         if self.left_down:
             self.begin_stroke_if_needed()
-            if blur_now:
-                self.canvas.blur_disc(x,y,self.brush_radius)
-                ##if self.brush_radius==1: self.play_brush_tick()
+            if edge_only:
+                self.smart_refine(x,y,r_eff,margin=False)
+            elif blur_now:
+                self.canvas.blur_disc(x,y,r_eff,a_eff,self.soft_edge)
+                if smart: self.smart_refine(x,y,r_eff)
             else:
-                self.canvas.paint_disc_blend(x,y,self.brush_radius,self.current_value,self.brush_alpha,self.soft_edge)
+                self.canvas.paint_disc_blend(x,y,r_eff,self.current_value,a_eff,self.soft_edge)
                 # reset luma to default grey regardless of opacity
-                self.canvas.luma_disc_blend(x,y,self.brush_radius,TEXT_LUMA,1.0,self.soft_edge)
-                ##if self.brush_radius==1: self.play_brush_tick()
+                self.canvas.luma_disc_blend(x,y,r_eff,TEXT_LUMA,1.0,self.soft_edge)
+                if smart: self.smart_refine(x,y,r_eff)
 
         elif self.right_down:
             self.begin_stroke_if_needed()
-            self.canvas.erase_disc_blend(x,y,self.brush_radius,self.brush_alpha,self.soft_edge)
-            ##if self.brush_radius==1: self.play_brush_tick()
+            if self.mode=="edge":
+                ys,xs=self.canvas.disc_cells(x,y,r_eff)    # RMB in SMART EDGE: back to the plain tone characters
+                self.canvas.ov[ys,xs]=0
+            else:
+                self.canvas.erase_disc_blend(x,y,r_eff,a_eff,self.soft_edge)
+                if smart: self.smart_refine(x,y,r_eff)
 
         elif self.mid_down:
             self.begin_stroke_if_needed()
             # MID = lighten (towards 0), CTRL+MID = darken (towards 1)
             delta = (-LIGHTEN_STEP) if not ctrl else (+LIGHTEN_STEP)
-            self.canvas.add_disc(x,y,self.brush_radius, delta, self.brush_alpha, self.soft_edge)
-            ##if self.brush_radius==1: self.play_brush_tick()
+            self.canvas.add_disc(x,y,r_eff, delta, a_eff, self.soft_edge)
+            if smart: self.smart_refine(x,y,r_eff)
+
+    def eff_alpha(self):
+        """Brush opacity, scaled by pen pressure when the mode asks for it."""
+        return self.brush_alpha * (self.pen.scale() if self.pen.mode in ("OPACITY", "BOTH") else 1.0)
+
+    def eff_radius(self):
+        """Brush radius in cells, scaled by pen pressure when the mode asks for it."""
+        if self.pen.mode in ("SIZE", "BOTH"):
+            return max(1, int(round(self.brush_radius * self.pen.scale())))
+        return self.brush_radius
+
+    def smudge_move(self, x0, y0, x1, y1):
+        """Drag the ink under the brush from cell (x0,y0) to (x1,y1), one cell step at a time."""
+        n = max(abs(x1-x0), abs(y1-y0))
+        if n == 0: return
+        k = max(0.0, min(1.0, self.eff_alpha()*SMUDGE_GAIN))
+        rad = self.eff_radius()
+        px, py = x0, y0
+        for i in range(1, n+1):
+            qx = x0 + int(round((x1-x0)*i/n)); qy = y0 + int(round((y1-y0)*i/n))
+            self.canvas.smudge_step(px, py, rad, qx-px, qy-py, k)
+            px, py = qx, qy
+
+    def toggle_smart_mode(self, which):
+        if self.mode == which:
+            self.mode = "paint"
+        else:
+            if self.mode not in ("hlight", "smart", "edge", "smudge"):
+                self.prev_mode = self.mode
+            self.mode, self.pt1 = which, None
+        self.shift_blur = False
+
+    def blur_active(self):
+        return (self.mode=="blur") or (self.mode in ("paint","smart") and self.shift_blur)
+
+    def smart_refine(self, cx, cy, r, margin=True):
+        """Recompute the border characters of the cells under the brush disc (plus a 1 cell margin when
+        painting, because new ink changes which neighbours are borders). Always computed from the TONES,
+        so repeating it is stable."""
+        ys, xs = self.canvas.disc_cells(cx, cy, r)
+        if len(ys) == 0: return
+        if margin:
+            rows, cols = self.canvas.rows, self.canvas.cols
+            y0 = max(0, ys.min()-1); y1 = min(rows-1, ys.max()+1); x0 = max(0, xs.min()-1); x1 = min(cols-1, xs.max()+1)
+            m = np.zeros((y1-y0+3, x1-x0+3), dtype=bool)
+            m[ys-y0+1, xs-x0+1] = True
+            d = m.copy()
+            for dy in (-1,0,1):
+                for dx in (-1,0,1):
+                    d |= np.roll(np.roll(m, dy, axis=0), dx, axis=1)
+            yy, xx = np.nonzero(d[1:-1,1:-1])
+            ys = yy + y0; xs = xx + x0
+        self.canvas.ov[ys, xs] = self.edge.codes_for(self.canvas.buf, ys, xs)
 
     # ---------- modal prompt ----------
     def ask_modal_yesno(self,text):
@@ -2485,7 +3072,7 @@ class App:
                             self.mode = "paint"
                             self.shift_from_hlight = True
                             self.shift_blur = True
-                        elif self.mode == "paint":
+                        elif self.mode in ("paint", "smart"):
                             self.shift_blur = True
 
                     if ctrl and ev.key == pygame.K_q:
@@ -2520,12 +3107,17 @@ class App:
                             self.pt1 = None
                         elif self.mode == "hlight":
                             self.mode = self.prev_mode if (self.prev_mode and self.prev_mode != "hlight") else "paint"
+                        elif self.mode in ("smart", "edge", "smudge"):
+                            self.mode = "paint"
 
                     elif ctrl and (not (mods & pygame.KMOD_ALT)) and ev.key == pygame.K_s:
                         self.quick_save()
 
                     elif ctrl and ev.key == pygame.K_z:
                         self.undo()
+
+                    elif ctrl and ev.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN):
+                        self.canvas_resize_key(ev.key, shrink=shift)
 
                     elif (not shift) and (not ctrl) and ev.key == pygame.K_s:
                         self.soft_edge = not self.soft_edge
@@ -2558,6 +3150,18 @@ class App:
 
                     elif ev.key == pygame.K_g:
                         self.grid_enabled = not self.grid_enabled
+
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_m:
+                        self.toggle_smart_mode("smart")
+
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_e:
+                        self.toggle_smart_mode("edge")
+
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_d:
+                        self.toggle_smart_mode("smudge")
+
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_p:
+                        self.pen.cycle_mode()
 
                     elif ev.key == pygame.K_LEFTBRACKET:
                         self.brush_radius = max(1, self.brush_radius - 1)
@@ -2677,13 +3281,22 @@ class App:
 
 
                     # Click on pickers/bars first
+                    self._picker_grabbed = None
                     if self.handle_picker_click(mx, my):
+                        if ev.button == 1:
+                            self.picker_drag = self._picker_grabbed    # click and drag keeps changing the tone
                         continue
 
                     # Click nos indicadores (HLIGHT, SOFT, PAINT, BLUR, LINE, LINEAA)
                     if ev.button == 1:
                         if self.handle_mode_stack_click(mx, my):
                             continue
+                        if self.smart_btn.collidepoint(mx, my):
+                            self.play_ui_click(); self.toggle_smart_mode("smart"); continue
+                        if self.edge_btn.collidepoint(mx, my):
+                            self.play_ui_click(); self.toggle_smart_mode("edge"); continue
+                        if self.smudge_btn.collidepoint(mx, my):
+                            self.play_ui_click(); self.toggle_smart_mode("smudge"); continue
 
                     # Grid UI clicks
                     if ev.button == 1:
@@ -2822,6 +3435,8 @@ class App:
                 elif ev.type == pygame.MOUSEBUTTONUP:
                     if ev.button == 1:
                         self.left_down = False
+                        self.picker_drag = None
+                        self.smudge_last = None
                         self.snd_last_cell = None
                     elif ev.button in (3, 8):
                         self.right_down = False
@@ -2833,6 +3448,8 @@ class App:
 
                 elif ev.type == pygame.MOUSEMOTION:
                     self.hover_cell = self.mouse_to_cell(mx, my)
+                    if self.picker_drag:
+                        self.picker_drag_update(mx, my)
                     if (self.left_down or self.right_down or self.mid_down) and self.hover_cell and (self.hover_cell != self.snd_last_cell):
                         self.play_brush_cell_trigger(self.hover_cell)
                     if self.show_help and self.cursor_support:

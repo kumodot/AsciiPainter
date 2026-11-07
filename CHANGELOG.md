@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.98
+
+### Added
+- **Dynamic canvas size.** `Ctrl+Arrow` adds cells on that side (10 columns / 6 rows per press; left and up shift the drawing so it keeps its place). `Ctrl+Shift+Arrow` removes up to one step from that side, but only cells that are empty; if the edge has ink nothing is removed. Fully undoable (`Ctrl+Z` also restores the old size). The window and the sidebar resize with the canvas, the overlay image is rescaled, and the sidebar shows `CANVAS: WxH`. Limits: 20x12 minimum, 240x160 and 30000 cells maximum (`CANVAS_*` constants).
+- **LOAD grows the canvas** when the TXT is bigger than the current one (`AUTO_GROW_ON_LOAD`).
+
+### Changed
+- **SHIFT+H help uses a smaller font** (`HELP_FONT_SIZE`) so the whole list, the credits and the new shortcuts fit in the sidebar.
+
+### Notes
+- NEW keeps the current canvas size. The timelapse stretches frames recorded before a resize to the shape of the first frame; clear it (`Ctrl+T`) after resizing if you want a clean aspect.
+
+### Tests
+- 40 new checks (141 in total): grow/shrink on every side, content and sidebar alignment, undo, limits, exports, LOAD fit, overlay, timelapse, help layout, redraw speed at 200x108.
+
+## v0.97
+
+### Fixed
+- **Blur brush ignored the opacity setting.** It now blends with the brush opacity, and it follows the SOFT edge falloff like the paint brush does.
+
+### Added
+- **Pen pressure** (Windows Ink, optional): pressure can drive opacity, size or both (`P` cycles OFF / OPACITY / SIZE / BOTH). Mouse behaviour is unchanged, and outside Windows the hook stays off. The sidebar shows `PEN:` with mode and live pressure. Not tested on real tablet hardware yet.
+
+### Tests
+- 13 new checks (101 in total): blur opacity, pressure mapping, structure layout, P key.
+
+## v0.96
+
+### Added
+- **SMUDGE** (`D`, button in the sidebar): pushes the ink along the drag direction. Ink is conserved and piles up in front of the brush until cells are full; ink that does not fit stays behind and nothing leaves the canvas. Brush radius = size, opacity = strength (`SMUDGE_GAIN`). Smart Edge characters of moved cells are removed.
+
+### Tests
+- 10 new checks (88 in total): ink conservation, pushing direction, full areas, canvas edge, drag through the app, key and button.
+
+## v0.95
+
+### Added
+- **SMART BRUSH** (`M`, button in the sidebar): paints like the normal brush and gives the borders of the painted shape characters that follow the angle of the edge.
+- **SMART EDGE** (`E`, button, or `Ctrl + Left Click` while in SMART BRUSH): changes only the characters of border cells under the brush, tones stay as they are. `Right Click` in SMART EDGE restores the plain tone characters. `Shift` still blurs in SMART BRUSH.
+- **Character override layer** in the canvas. It is part of undo, TXT/PNG save and Markdown/HTML copy, and a TXT with edge-set characters loads back with them.
+- **`assets/EDGES.txt`:** global edge character set (works with every palette). The matching is done from the shape of each glyph in the current font, so it adapts to any font.
+- New sidebar buttons `SMART [M]` and `EDGE [E]`, new lines in the help overlay.
+
+### Notes
+- Timelapse and `Ctrl+Shift+C` (copy fit) resample the tones, so they do not show smart characters.
+
+### Tests
+- 22 new checks (78 in total).
+
+## v0.94
+
+### Changed
+- **Round brush.** Character cells are taller than wide, so a brush of radius r looked like a tall oval. Brush, blur, thick lines and the brush ring now measure distance in screen pixels and are round on screen (`BRUSH_ROUND_IN_PIXELS = True`; set it to False for the old cell-space circle). The ring is a gap-free outline of exactly the cells the brush paints.
+- **Click and drag on the tone sphere and on the palette bar** changes the tone while the mouse is held. Dragging outside the sphere clamps to the nearest cell. The click sound plays only on the first press.
+- **Smaller sidebar font** (`UI_FONT_SIZE = 13`) for buttons, info lines and GRID. The drawing font and the mode indicators beside the sphere did not change.
+- **Compact buttons:** NEW / LOAD / IMPORT / SAVE share one row (24 px high), the sidebar spacing is tighter and there is more free room at the bottom.
+
+### Tests
+- 14 new checks (57 in total): brush roundness, ring, drag, sidebar layout.
+
 ## v0.93
 
 Tone sphere (gradient picker) fixes.

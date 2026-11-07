@@ -1,4 +1,4 @@
-# ASCII Painter v0.93
+# ASCII Painter v0.98
 
 A lightweight ASCII art painting tool: paint with a mouse on a grid of monospaced characters, using a palette that goes from light to dark. The interface is ASCII too, on purpose.
 
@@ -41,7 +41,7 @@ sh run_asciipaint.sh
 ### Manually
 ```
 pip install -r requirements.txt
-python ASCIIPAINT_v092.py
+python ASCIIPAINT_v098.py
 ```
 Python 3.11 or newer is recommended (tested on 3.13).
 
@@ -59,8 +59,9 @@ Both pick the newest `ASCIIPAINT_v*.py` and read its `VERSION`. PyInstaller is i
 ## Files and Folders
 
 ```
-ASCIIPAINT_v092.py     main source (the version number is in the file name)
+ASCIIPAINT_v098.py     main source (the version number is in the file name)
 assets/PAL.txt         palette definitions (light to dark)
+assets/EDGES.txt       characters used by Smart Brush / Smart Edge for borders
 assets/startup.txt     ASCII project loaded at launch (optional)
 assets/sounds/         keypress_XX.wav feedback sounds (files starting with _ are ignored)
 assets/icon.ico        app icon
@@ -89,6 +90,7 @@ If the app crashes, the error is written to `crash.log` next to it.
 
 ### 🧱 Canvas & Grid
 - 80 columns canvas with correct aspect ratio for monospaced rendering (4:3 look).  
+- **Resizable canvas:** `Ctrl+Arrow` grows that side, `Ctrl+Shift+Arrow` removes empty cells from that side. Undoable; LOAD grows the canvas to fit a bigger TXT. The window resizes with it.  
 - Grid overlay aligned with the character cells (1:1).  
 - `Ctrl+Shift+C` snaps the copied bounding box to grid divisions when the grid is ON.  
 
@@ -125,6 +127,32 @@ Records your drawing and exports an animated GIF of the process.
 
 ---
 
+## Smart Brush and Smart Edge
+
+A cell is a border when it has ink and touches empty background. For those cells the app upsamples the neighbourhood of the tone grid to pixels, looks at the local silhouette and picks the character of the **edge set** whose shape follows it best (`_ , . ' j L 7 d b p S ...`). Tones are never changed by SMART EDGE, and the result is saved in the TXT, the PNG and the clipboard copies. Painting normally over a cell removes its smart character. Loading a TXT keeps edge-set characters that are not in the current palette.
+
+The edge set lives in `assets/EDGES.txt` (one line of characters, `#` comments) and works with every palette. The thresholds are constants at the top of the source: `EDGE_INK_MIN`, `EDGE_BG_MAX`, `EDGE_UP_THRESH` (higher = thinner border glyphs) and `EDGE_MASS_W`.
+
+---
+
+## Smudge
+
+Think of the canvas as black paint on a dark surface: the "ink" of a cell is `1 - tone` (dense characters = a lot of ink). SMUDGE moves ink in the direction you drag, one cell step at a time. Ink is conserved: it piles up in front of the brush until cells are full, the part that does not fit stays where it was, and nothing is pushed out of the canvas. Cells that lose ink get lighter, so a wake appears behind the stroke.
+
+- **Brush radius** sets the size, **opacity** (`Shift + Wheel`) sets how much ink moves per step (`SMUDGE_GAIN` in the source).
+- Right Click still erases and Middle Click still lightens / darkens.
+- Smudging removes the Smart Edge characters of the cells it moves. Pass over them with SMART EDGE (`E`) afterwards.
+
+---
+
+## Pen pressure (optional, Windows)
+
+On Windows the app listens to Windows Ink pen messages. When a pen touches the tablet, the pressure scales the brush **opacity**, the brush **size**, or both, for every tool (paint, erase, blur, smudge, smart brush, highlight). With a mouse nothing changes. `P` cycles OFF / OPACITY / SIZE / BOTH (default OPACITY). The sidebar shows a `PEN:` line with the mode and the live pressure while you draw.
+
+If the line says `(no pen yet)` after drawing with the pen, the driver is not sending Windows Ink: enable "Use Windows Ink" in the tablet driver (Wacom, XP-Pen, Huion and others have that checkbox). Tweak `PEN_CURVE` and `PEN_MIN_SCALE` at the top of the source for the feel.
+
+---
+
 ## Shortcuts
 
 ### Drawing
@@ -139,8 +167,13 @@ Records your drawing and exports an animated GIF of the process.
 - **A** line anti-aliasing on/off  
 - **H** highlight mode  
 - **S** soft edge on/off  
-- **Shift (hold)** temporary blur  
-- **Esc** leave line or highlight mode  
+- **M** SMART BRUSH: paints, and the borders of what you paint get characters that follow the angle of the edge  
+- **E** SMART EDGE: does not paint, only swaps the characters of borders under the brush (**Right Click** puts the plain tone characters back)  
+- **Ctrl + Left Click** while in SMART BRUSH = SMART EDGE for that stroke  
+- **D** SMUDGE: drag with the left button to push the ink along the stroke (see below)  
+- **P** pen pressure mode: OFF / OPACITY / SIZE / BOTH (see below)  
+- **Shift (hold)** temporary blur (also in SMART BRUSH)  
+- **Esc** leave line, highlight or smart mode  
 
 ### Tone & Brush
 - **-** darker, **=** lighter  
@@ -166,6 +199,7 @@ Records your drawing and exports an animated GIF of the process.
 - **O** show/hide overlay, **Shift+O** load overlay  
 - **T / Ctrl+E / Ctrl+T** timelapse (see above)  
 - **Shift+H** help overlay  
+- **Ctrl+Arrows** grow canvas, **Ctrl+Shift+Arrows** shrink empty edges  
 - **Ctrl+Q** quit (asks to save first)  
 
 ---
@@ -182,6 +216,10 @@ TARGET_ASPECT = 4.0 / 3.0
 MAX_COLS = 80
 ROWS_OVERRIDE = 48
 AUTO_FIT_WINDOW = True    # shrink the window if the screen is too small
+CANVAS_GROW_COLS = 10      # cells per Ctrl+Left/Right
+CANVAS_GROW_ROWS = 6       # cells per Ctrl+Up/Down
+CANVAS_MAX_COLS, CANVAS_MAX_ROWS = 240, 160
+HELP_FONT_SIZE = 12       # Shift+H list font
 ```
 
 ---

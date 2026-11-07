@@ -1,0 +1,4 @@
+# EDGES.txt - characters used by SMART BRUSH / SMART EDGE for borders.
+# Works with every palette. Lines starting with # are comments; spaces are ignored.
+# Thin characters (. , ' ` _ - ^) give smooth outlines, heavier ones (d b p j L 7 S $) fill bigger corners.
+_-¯.,:;'"`^¨ªº¬|/\()[]<>~!?iIl1jJL7rdbpqocunhkyZ4S$

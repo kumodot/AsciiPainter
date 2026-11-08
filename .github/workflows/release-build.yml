@@ -1,0 +1,59 @@
+name: Build Windows release
+
+# Runs when this branch is pushed. Builds the folder version and the single exe on Windows,
+# then creates a DRAFT release (so it can be tested before it is published).
+on:
+  push:
+    branches: [release-build]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read the version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content version.json | ConvertFrom-Json).version
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build folder version
+        shell: cmd
+        run: call build_release.bat
+
+      - name: Build single exe
+        shell: cmd
+        run: call build_onefile.bat
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path "releases\ASCII_Painter_v${v}_build\*" -DestinationPath "out\ASCII_Painter_v${v}_win64.zip"
+          Copy-Item "dist\ASCII_Painter_v${v}.exe" "out\ASCII_Painter_v${v}.exe"
+          Get-ChildItem out | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: out/*
+
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          gh release create "v$v" "out\ASCII_Painter_v${v}_win64.zip" "out\ASCII_Painter_v${v}.exe" `
+            --title "ASCII Painter v$v" --notes-file "docs\RELEASE_NOTES_v$v.md" --target main --draft

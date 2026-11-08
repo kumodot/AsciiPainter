@@ -25,6 +25,13 @@ ASSETS_DIR = BUNDLE_DIR / "assets"
 SAVES_DIR = USER_DIR / "saves"
 
 
+def pal_write_path():
+    """Where palette edits are saved: the PAL.txt in use, or a PAL.txt next to the .exe when the one in use is bundled."""
+    p = find_asset("PAL.txt")
+    if p is not None and not (IS_FROZEN and BUNDLE_DIR in p.parents): return p
+    return USER_DIR / "PAL.txt"
+
+
 def find_asset(name):
     """First existing file called `name`: USER_DIR (user override) first, then the bundled assets."""
     for base in (USER_DIR, ASSETS_DIR):
@@ -42,7 +49,7 @@ def compute_rows_for_aspect(cols: int, char_w: int, char_h: int, target_aspect: 
     return max(1, int(round(rows_float)))
 
 # ====================== CONFIG ======================
-VERSION = "0.98"
+VERSION = "1.13"
 
 # Palette stored LIGHT -> DARK (left to right)
 DEFAULT_PALETTE = "$@%#*+=;:,. "
@@ -58,6 +65,10 @@ TL_DEBUG = False  # True to see full tracebacks and crash on export errors
 TL_BAR_HEIGHT = 3
 TL_BAR_MARGIN_X = 12
 TL_BAR_GAP_FROM_SPHERE = 6
+TL_ROW_H = 16                # height of the T.LAPSE row under the tone sphere (REC / bar / count / GIF / CLR)
+TL_ROW_GAP = 6
+TL_START_ON = False          # True = start every session already recording
+TL_WIPE_ARM_MS = 2000        # the CLR button needs a second click within this time
 
 # --- Overlay settings ---
 OVERLAY_OPACITY = 0.35  # 0.0 = fully transparent, 1.0 = fully opaque
@@ -133,6 +144,8 @@ PEN_CURVE = 1.0                # pressure ** PEN_CURVE (above 1 = needs a harder
 PEN_MIN_SCALE = 0.05           # lightest pressure still leaves a trace
 
 # --- Smudge ---
+FADE_LEN_MAX = 160.0     # FADE: stroke length (in cells) over which the ink dies out, with the slider all the way to the slow side
+FADE_LEN_MIN = 4.0       # ... and with the slider all the way to the fast side
 SMUDGE_GAIN = 0.8        # fraction of the ink under the brush that moves 1 cell per step at opacity 1.0
 SMUDGE_RGB  = (255, 170, 60)
 
@@ -163,6 +176,57 @@ CANVAS_MAX_CELLS = 30000     # redraw cost grows with the cell count
 AUTO_GROW_ON_LOAD = True     # LOAD of a TXT bigger than the canvas grows the canvas (up to the limits)
 RESIZE_MIN_WINDOW_SCALE = 0.3  # lowest window scale AUTO_FIT_WINDOW may use for big canvases
 FLASH_MS = 1800
+
+# Palette shortcut bar (under the character bar): one small button per palette 1..10 found in PAL.txt
+PAL_SLOT_H = 18
+PAL_SLOT_GAP = 3
+PAL_SLOT_BAR_GAP = 4
+# --- BOMB brush (K): click = fuse, then everything around the bomb is thrown outward leaving trails ---
+BOMB_FUSE_MS = 1500          # fuse time (if you provide sounds/bomb_fuse.wav its length is used instead)
+BOMB_FUSE_LOOPS = 2          # how many times the centre character runs through all shades during the fuse
+BOMB_FLASH_MS = 90           # white flash at the moment of the explosion
+BOMB_BLAST_MS = 1000         # time the debris takes to fly out
+BOMB_R_BASE = 4.0            # blast radius (in cells) at brush radius 1 ...
+BOMB_R_PER_BRUSH = 1.5       # ... plus this much per extra brush radius step
+BOMB_R_MAX = 60
+BOMB_CORE = 0.25             # fraction of the radius that flashes white and is always blown completely empty
+BOMB_REACH_MIN = 0.55        # every direction gets its own reach between these fractions of the radius ...
+BOMB_REACH_MAX = 1.15        # ... (can go a little past the radius)
+BOMB_RAYS = 18               # number of rays; each has its own reach and pushes its neighbours with a smooth fall-off
+BOMB_RAY_SPREAD = 0.65       # angular influence of a ray, as a fraction of the angle between rays (higher = softer blend)
+BOMB_KEEP_POW = 1.3          # how the empty core fades out toward the tips (higher = bigger empty area)
+BOMB_FADE_POW = 1.0          # ceiling of ink along a ray: (distance / reach) ** this. Lower = darker (more ink) sooner, higher = the void fades out more slowly
+BOMB_TRAIL_GAIN = 0.45       # strength of the trails relative to the ink that flies (many trails cross in dense areas)
+BOMB_TRAIL_MIN = 0.12        # trail strength at the start of a flight (1.0 = full strength at the landing point)
+BOMB_TRAIL_POW = 1.6         # how fast the trail gets stronger towards the landing point
+BOMB_WAVE = 0.45             # the shock wave leaves the centre and reaches the tips at this fraction of the blast time
+BOMB_RING = 0.45             # strength of the bright ring that rides on the wave front (0 = off)
+BOMB_JITTER = 0.06           # random angle (radians) added to each piece of debris
+BOMB_SOUND_VOL = 0.6         # procedural sounds; put sounds/bomb_fuse.wav and sounds/bomb_explosion.wav to override
+BOMB_RGB = (255, 90, 60)
+BOMB_RING_POW = 1.6          # the warning ring shrinks from the full blast radius to the centre; higher = closes later and faster
+TOOLTIP_DELAY_MS = 400       # hover time before a quick-help box appears
+DOUBLE_CLICK_MS = 450        # double click on a character of the palette bar opens the character table
+VOICE_MODE_LINES = {"paint": "paint", "blur": "blur", "line": "line", "hlight": "highlight", "smart": "smart brush",
+                    "edge": "smart edge", "smudge": "smudge", "bomb": "ink bomb"}
+VOICE_TRU_LINES = ("true mode", "less slop mode", "organic mode", "hand made mode", "artisanal mode", "no cheating mode")
+VOICE_BOMB_LINES = ("splat incoming", "messy business", "big splash", "here comes the mess", "letters everywhere", "scatter the letters")
+TRU_ADVANCE = True        # TRU mode: the cursor steps right after a typed character
+TRU_BLINK_MS = 450
+TRU_RGB = (255, 200, 90)
+PAL_MIN_SLOTS = 3             # a palette keeps at least 2 shades plus the darkest (space)
+PAL_MAX_SLOTS = 24            # more than this would not fit in the palette bar
+TABLE_COLS = 20              # columns of the floating character table
+# characters offered by the table (only those the font can draw are shown)
+TABLE_SETS = ("!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+              "░▒▓█▀▄▌▐■□▪▫▬▲►▼◄◊○●◘◙◦"
+              "°±²³µ¶·¸¹º¼½¾×÷¤¦§¨©«¬®¯¡¿¢£¥"
+              "∙√∞≈≠≤≥∑∏∫∂∆"
+              "─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬"
+              "←↑→↓↔↕"
+              "♠♣♥♦♪♫☺☻☼♀♂†‡•…‰")
+IND_TIPS = {"HLIGHT": "H  HIGHLIGHT MODE", "SOFT": "S  SOFT EDGE ON/OFF", "PAINT": "ESC  BACK TO PAINT",
+            "BLUR": "HOLD SHIFT or B  BLUR BRUSH", "LINE": "L  LINE MODE", "LINEAA": "A  LINE ANTIALIAS ON/OFF"}
 
 # Brush & history
 INITIAL_BRUSH_RADIUS = 1
@@ -361,6 +425,7 @@ class PaletteManager:
     def __init__(self):
         # dicionário: { nn(int 1..99): {"name": str, "chars": str} }
         self.map = {}
+        self.edits = {}  # {nn: edited string} unsaved edits; kept when you switch palettes
         self.order = []  # lista ordenada de NN existentes
         self.index = 1   # índice selecionado (01..99), default = 1 (ajustado abaixo)
         self.display_name = "DEFAULT"  # "01-NOME"
@@ -436,7 +501,7 @@ class PaletteManager:
         if idx in self.map:
             entry = self.map[idx]
             # mantém string EXATAMENTE como no arquivo (inclui espaços finais)
-            s = entry["chars"]
+            s = self.edits.get(idx, entry["chars"])
             # sanity: paleta mínima com 2 caracteres
             if isinstance(s, str) and len(s) >= 2:
                 self.index = idx
@@ -447,6 +512,94 @@ class PaletteManager:
         self.index = 0
         self.display_name = "DEFAULT"
         self.rebuild_cache_from_string(DEFAULT_PALETTE)
+
+    # ---------- editing and saving (v1.00) ----------
+    def _commit(self, core):
+        """Apply a new list of shade characters (the darkest space is added at the end) and track the edit."""
+        self.rebuild_cache_from_string("".join(core))
+        nn = self.index
+        if nn in self.map:
+            if self.string == ensure_darkest_space(self.map[nn]["chars"]): self.edits.pop(nn, None)
+            else: self.edits[nn] = self.string
+
+    def set_char(self, i, ch):
+        """Replace the character at palette position i (the darkest slot stays a space). Tracks the edit."""
+        if not (0 <= i < self.n - 1) or ch in (" ", "\u00a0"): return False
+        s = list(self.string); s[i] = ch
+        self._commit(s)
+        return True
+
+    def insert_slot(self, i, max_n=PAL_MAX_SLOTS):
+        """Add a shade slot at position i (0 = lightest). It starts as a copy of the slot that is pushed along."""
+        if self.n >= max_n or not (0 <= i < self.n - 1): return False
+        s = list(self.string[:-1]); s.insert(i, s[i])
+        self._commit(s); return True
+
+    def remove_slot(self, i):
+        """Remove the shade at position i (never the darkest space, never below PAL_MIN_SLOTS)."""
+        if self.n <= PAL_MIN_SLOTS or not (0 <= i < self.n - 1): return False
+        s = list(self.string[:-1]); del s[i]
+        self._commit(s); return True
+
+    def move_slot(self, i, j):
+        """Move the shade at position i to position j (both among the editable slots)."""
+        if i == j or not (0 <= i < self.n - 1) or not (0 <= j < self.n - 1): return False
+        s = list(self.string[:-1]); ch = s.pop(i); s.insert(j, ch)
+        self._commit(s); return True
+
+    def restore(self, nn):
+        self.edits.pop(nn, None)
+        if self.index == nn: self.set_index(nn)
+
+    def _write_file(self):
+        path = pal_write_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        bak = path.with_name(path.name + ".bak")
+        if path.exists() and not bak.exists():          # keep the very first version as a safety copy
+            import shutil
+            shutil.copyfile(path, bak)
+        text = "\n".join(f"{nn:02d}-{self.map[nn]['name']}\n{self.map[nn]['chars']}\n" for nn in sorted(self.map))
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f: f.write(text)
+        os.replace(tmp, path)
+
+    def save(self, nn):
+        """Write the edited version of palette nn over itself in PAL.txt. Returns (ok, message)."""
+        if nn not in self.edits: return False, "NOTHING TO SAVE"
+        old = self.map[nn]["chars"]
+        self.map[nn]["chars"] = self.edits[nn]
+        try: self._write_file()
+        except Exception as e:
+            self.map[nn]["chars"] = old
+            return False, "COULD NOT WRITE PAL.TXT"
+        self.edits.pop(nn); self.order = sorted(self.map)
+        return True, f"SAVED {nn:02d}-{self.map[nn]['name']}"
+
+    def save_new(self, nn):
+        """Save the (edited) palette nn into the lowest free number 1..10. Returns (new number or None, message)."""
+        free = [k for k in range(1, 11) if k not in self.map]
+        if not free: return None, "NO FREE SLOT (1-10)"
+        new = free[0]; name = self.map[nn]["name"]
+        if not name.endswith(".EDIT"): name += ".EDIT"
+        self.map[new] = {"name": name, "chars": ensure_darkest_space(self.edits.get(nn, self.map[nn]["chars"]))}
+        try: self._write_file()
+        except Exception:
+            del self.map[new]
+            return None, "COULD NOT WRITE PAL.TXT"
+        self.edits.pop(nn, None); self.order = sorted(self.map)
+        self.set_index(new)
+        return new, f"SAVED AS {new:02d}-{name}"
+
+    def save_here(self, nn):
+        """Save the palette currently in use into the empty slot nn."""
+        if nn in self.map: return False, "SLOT NOT EMPTY"
+        self.map[nn] = {"name": "CUSTOM", "chars": ensure_darkest_space(self.string)}
+        try: self._write_file()
+        except Exception:
+            del self.map[nn]
+            return False, "COULD NOT WRITE PAL.TXT"
+        self.order = sorted(self.map); self.set_index(nn)
+        return True, f"SAVED AS {nn:02d}-CUSTOM"
 
     def invert(self):
         self.chars.reverse()
@@ -1199,6 +1352,561 @@ class TimelapseRecorder:
 
 
 
+# ====================== BOMB ENGINE ======================
+class BombPlan:
+    """Everything the explosion needs, computed once: the crater, and for every piece of ink in the crater a
+    straight flight path with a trail that gets stronger towards the landing cell."""
+    def ink_at(self, tau):
+        """Ink (0..1) of the whole canvas at blast time tau (0..1). The wave front leaves the centre like a ripple;
+        a cell is emptied when the front reaches it, and its ink starts flying from that moment."""
+        out = np.where(tau >= self.tr, self.base, self.orig)
+        released = tau >= self.tr
+        if self.P:
+            g = np.clip((tau - self.trp) / np.maximum(1.0 - self.trp, 1e-6), 0.0, 1.0)      # flight progress of every piece
+            vt = self.trp[self.vi] + self.vf * (1.0 - self.trp[self.vi])                      # moment each trail cell appears
+            m = vt <= tau + 1e-9
+            np.add.at(out, (self.vy[m], self.vx[m]), self.va[m])
+            fl = (g > 0.0) & (g < 1.0)                                                         # pieces still flying
+            if fl.any():
+                t = g[fl] * self.L[fl]
+                hx = np.rint(self.sx[fl] + self.ux[fl] * t).astype(int); hy = np.rint(self.sy[fl] + self.uy[fl] * t / self.aspect).astype(int)
+                ok = (hx >= 0) & (hx < out.shape[1]) & (hy >= 0) & (hy < out.shape[0])
+                np.maximum.at(out, (hy[ok], hx[ok]), self.a[fl][ok])
+        if BOMB_RING > 0 and 0.0 < tau < BOMB_WAVE:                                           # the bright ring on the front
+            front = tau / BOMB_WAVE * self.Lc
+            ring = (np.abs(self.d - front) <= 0.8) & self.disc
+            out = np.where(ring, np.maximum(out, BOMB_RING * (1.0 - tau / BOMB_WAVE) + out * 0.0), out)
+        out = np.clip(out, 0.0, 1.0)
+        # a ceiling that rises smoothly from the centre to the tip of every ray: dense areas keep a long gradation
+        # instead of piling the trails back up to the densest character
+        out = np.where(released & self.disc, np.minimum(out, self.ceil), out)
+        return out
+
+    def flash_ink(self):
+        out = self.orig.copy(); out[self.core] = 1.0
+        return out
+
+
+def bomb_plan(ink, cx, cy, R, aspect, rng, alpha=1.0):
+    """ink = 1 - tone of the canvas. R is in cell widths (the blast is round in pixels, like the brush).
+    Like a radial smudge: every direction has its own reach. Ink is pushed outward along that direction, the cells it
+    leaves keep less ink the closer they are to the centre (a void that fades toward the tips), and the pushed ink
+    leaves a trail that gets stronger toward the point where it lands."""
+    rows, cols = ink.shape
+    yy, xx = np.mgrid[0:rows, 0:cols]
+    dx = (xx - cx).astype(np.float64); dy = (yy - cy) * aspect
+    d = np.hypot(dx, dy)
+    th = np.arctan2(dy, dx)
+    # a few rays (jittered around the circle), each with its own reach; a cell takes the reach of the rays around it,
+    # weighted by how close its direction is to each ray (gradual influence to the sides)
+    n = BOMB_RAYS
+    ra = (np.arange(n) + rng.uniform(-0.35, 0.35, n)) * (2 * np.pi / n) + rng.uniform(0, 2 * np.pi)
+    rr = R * rng.uniform(BOMB_REACH_MIN, BOMB_REACH_MAX, n)
+    rr = np.where(rng.random(n) < 0.12, rr * 1.2, rr)                 # a few long spikes
+    sig = BOMB_RAY_SPREAD * (2 * np.pi / n)
+    dang = (th[..., None] - ra[None, None, :] + np.pi) % (2 * np.pi) - np.pi
+    w = np.exp(-(dang / sig) ** 2)
+    Lc = (w * rr).sum(-1) / np.maximum(w.sum(-1), 1e-9)               # reach of every cell's direction
+    pl = BombPlan(); pl.aspect = aspect
+    pl.orig = ink.astype(np.float64).copy()
+    pl.core = d <= BOMB_CORE * R
+    pl.disc = d <= Lc                                                 # cells the blast touches
+    keep = np.where(pl.disc, np.clip((d / np.maximum(Lc, 1e-6)) ** BOMB_KEEP_POW, 0.0, 1.0), 1.0)
+    keep[pl.core] = 0.0
+    moved = pl.orig * (1.0 - keep) * alpha                           # opacity = how much of the ink the wave pushes
+    pl.base = pl.orig - moved
+    ceil = np.clip(d / np.maximum(Lc, 1e-6), 0.0, 1.0) ** BOMB_FADE_POW
+    pl.ceil = np.maximum(1.0 - alpha * (1.0 - ceil), 0.0)                # opacity relaxes the ceiling (alpha 0 = no ceiling)
+    pl.d = d; pl.Lc = Lc
+    pl.tr = np.clip(BOMB_WAVE * d / np.maximum(Lc, 1e-6), 0.0, BOMB_WAVE)
+    pl.tr[pl.core] = 0.0
+    pl.tr[~pl.disc] = 0.0
+    sy, sx = np.nonzero(moved > 0.02)
+    pl.P = P = len(sy)
+    if P == 0: return pl
+    a = moved[sy, sx]
+    pl.trp = pl.tr[sy, sx]
+    dsrc = d[sy, sx]; Ls = Lc[sy, sx]
+    ang = np.where(dsrc < 0.3, rng.uniform(0, 2*np.pi, P), th[sy, sx]) + rng.normal(0.0, BOMB_JITTER, P)
+    ux, uy = np.cos(ang), np.sin(ang)
+    land = dsrc + np.maximum(Ls - dsrc, 0.0) * rng.uniform(0.6, 1.0, P)   # lands near the tip of its direction
+    land = np.where(rng.random(P) < 0.10, land * 1.25, land)              # a few shards fly further
+    L = np.maximum(land - dsrc, 1.0)
+    S = max(3, int(np.ceil(L.max() / 0.5)) + 1)
+    f = np.linspace(0.0, 1.0, S)[None, :]
+    t = f * L[:, None]
+    cxs = np.rint(sx[:, None] + ux[:, None] * t).astype(int)
+    cys = np.rint(sy[:, None] + uy[:, None] * t / aspect).astype(int)
+    inb = (cxs >= 0) & (cxs < cols) & (cys >= 0) & (cys < rows)
+    valid = inb & (t >= np.minimum(1.0, 0.5 * L)[:, None])
+    same = (cxs[:, :-1] == cxs[:, 1:]) & (cys[:, :-1] == cys[:, 1:])
+    valid[:, :-1] &= ~same                                                       # one deposit per cell: the strongest
+    amp = BOMB_TRAIL_GAIN * a[:, None] * (BOMB_TRAIL_MIN + (1.0 - BOMB_TRAIL_MIN) * f ** BOMB_TRAIL_POW)
+    pl.vy, pl.vx, pl.va = cys[valid], cxs[valid], amp[valid]
+    pl.vf = np.broadcast_to(f, (P, S))[valid]
+    pl.vi = np.broadcast_to(np.arange(P)[:, None], (P, S))[valid]
+    pl.sx, pl.sy, pl.ux, pl.uy, pl.L, pl.a = sx.astype(np.float64), sy.astype(np.float64), ux, uy, L, a
+    return pl
+
+
+def bomb_radius(brush_radius):
+    return min(float(BOMB_R_MAX), BOMB_R_BASE + BOMB_R_PER_BRUSH * (max(1, brush_radius) - 1))
+
+
+class Bomb:
+    def __init__(self, cx, cy, R, t0, alpha, fuse_ms, seed=None):
+        self.cx, self.cy, self.R, self.t0, self.alpha, self.fuse_ms = cx, cy, R, t0, alpha, fuse_ms
+        self.phase = "fuse"; self.plan = None; self.t_flash = 0; self.t_blast = 0
+        self.rng = np.random.default_rng(seed); self.fuse_snd = None
+
+    def fuse_progress(self, now):
+        return max(0.0, min(1.0, (now - self.t0) / float(self.fuse_ms)))
+
+
+def bomb_sound_arrays(freq, fuse_ms=BOMB_FUSE_MS, vol=BOMB_SOUND_VOL):
+    """Procedural sounds as float arrays in -1..1: (fuse, explosion). Short and not loud."""
+    rng = np.random.default_rng(7)
+    # fuse: hiss + crackle with a thin tone that falls in pitch (a bomb coming down)
+    n = int(freq * fuse_ms / 1000.0); t = np.arange(n) / float(freq); T = max(t[-1], 1e-6)
+    hiss = np.diff(np.convolve(rng.standard_normal(n), np.ones(3) / 3.0, mode="same"), prepend=0.0)
+    imp = (rng.random(n) < 0.002) * rng.standard_normal(n) * 6.0
+    crack = np.convolve(imp, np.exp(-np.arange(int(freq * 0.004)) / (freq * 0.0008)), mode="same")
+    tone = np.sin(2*np.pi*np.cumsum(1900.0 - 1300.0 * (t / T)) / freq) * 0.18
+    fuse = (0.35 * hiss + 0.5 * crack + tone) * np.minimum(1.0, t / 0.03) * np.minimum(1.0, (T - t) / 0.06)
+    fuse = fuse / max(np.abs(fuse).max(), 1e-9) * 0.5 * vol
+    # explosion: low-passed noise burst + a falling thump + a tiny click
+    n = int(freq * 0.75); t = np.arange(n) / float(freq); T = t[-1]
+    low = np.convolve(rng.standard_normal(n), np.ones(18) / 18.0, mode="same") * np.exp(-t / 0.16)
+    thump = np.sin(2*np.pi*np.cumsum(38.0 + 95.0 * np.exp(-t * 9.0)) / freq) * np.exp(-t * 4.5)
+    click = rng.standard_normal(n) * np.exp(-t / 0.006) * 0.6
+    boom = (0.9 * low + thump + click) * np.minimum(1.0, t / 0.002) * np.minimum(1.0, (T - t) / 0.12)
+    boom = boom / max(np.abs(boom).max(), 1e-9) * vol
+    return fuse, boom
+
+
+# ====================== VOICE (a very raw formant speech synthesizer) ======================
+# Text -> phonemes (a tiny lexicon + crude spelling rules) -> a source/filter synthesizer in the spirit of the
+# old SAM voices. Everything is computed with NumPy, nothing is recorded. Mono, VOICE_RATE Hz.
+VOICE_ON_DEFAULT = True
+VOICE_RATE = 22050
+VOICE_VOL = 0.8
+VOICE_PITCH = 104.0            # Hz at the start of a phrase (monotone robot, falls a little)
+VOICE_SPEED = 1.0              # 1.0 = normal, 0.8 = faster
+VOICE_CRUSH = 56               # amplitude steps per side (gritty low bit depth); 0 = off
+VOICE_CHANNEL = 6
+VOICE_CAPTIONS = True          # show what the voice says, word by word, in yellow at the top of the canvas
+VOICE_CAPTION_HOLD = 0.9       # seconds the whole phrase stays after the last word
+VOICE_CAPTION_RGB = (255, 214, 0)
+VOICE_FRAME = 110              # samples per control frame (5 ms)
+
+_VOW = {
+    "IY": (130, (270, 2290, 3010)), "IH": (100, (390, 1990, 2550)), "EH": (110, (530, 1840, 2480)),
+    "AE": (125, (660, 1720, 2410)), "AA": (130, (730, 1090, 2440)), "AO": (130, (570, 840, 2410)),
+    "UH": (100, (440, 1020, 2240)), "UW": (130, (300, 870, 2240)), "AH": (100, (640, 1190, 2390)),
+    "ER": (130, (490, 1350, 1690)),
+}
+_DIPH = {"EY": ("EH", "IY", 170), "AY": ("AA", "IY", 190), "OW": ("AO", "UW", 170),
+         "AW": ("AA", "UW", 190), "OY": ("AO", "IY", 190)}
+_LIQ = {"L": (70, (360, 1300, 2800)), "R": (75, (420, 1250, 1650)), "W": (65, (290, 620, 2200)), "Y": (60, (270, 2200, 3000))}
+_NAS = {"M": (80, (270, 1100, 2200)), "N": (75, (270, 1500, 2500)), "NG": (85, (270, 1900, 2500))}
+# fricatives: duration, (noise low Hz, high Hz), noise amp, voiced
+_FRIC = {"S": (105, (4500, 9500), 0.9, False), "Z": (90, (4500, 9500), 0.7, True),
+         "SH": (110, (2200, 6000), 1.0, False), "ZH": (95, (2200, 6000), 0.8, True),
+         "F": (90, (1500, 9000), 0.35, False), "V": (75, (1500, 9000), 0.3, True),
+         "TH": (90, (1800, 9000), 0.25, False), "DH": (55, (1800, 9000), 0.2, True)}
+# stops: closure ms, burst band, voiced
+_STOP = {"P": (50, (500, 3000), False), "B": (45, (500, 3000), True), "T": (50, (3000, 9000), False),
+         "D": (45, (3000, 9000), True), "K": (55, (1200, 4500), False), "G": (50, (1200, 4500), True)}
+_AFF = {"CH": (45, (2200, 6000), False), "JH": (40, (2200, 6000), True)}
+
+VOICE_LEXICON = {
+    "palette": "P AE L IH T", "saved": "S EY V D", "restored": "R IY S T AO R D", "paint": "P EY N T",
+    "blur": "B L ER", "line": "L AY N", "highlight": "HH AY L AY T", "smart": "S M AA R T",
+    "brush": "B R AH SH", "edge": "EH JH", "smudge": "S M AH JH", "bomb": "B AA M", "true": "T R UW",
+    "mode": "M OW D", "less": "L EH S", "non": "N AA N", "slop": "S L AA P", "organic": "AO R G AE N IH K",
+    "hand": "HH AE N D", "made": "M EY D", "artisanal": "AA R T IH Z AH N L", "no": "N OW",
+    "cheating": "CH IY T IH NG", "fire": "F AY ER", "in": "IH N", "the": "DH AH", "hole": "HH OW L",
+    "away": "AH W EY", "duck": "D AH K", "and": "AE N D", "cover": "K AH V ER",
+    "timelapse": "T AY M L AE P S", "start": "S T AA R T", "stop": "S T AA P", "cleared": "K L IY R D",
+    "gif": "JH IH F", "ready": "R EH D IY", "voice": "V OY S", "on": "AA N", "off": "AO F",
+    "canvas": "K AE N V AH S", "boom": "B UW M", "sam": "S AE M", "pixel": "P IH K S AH L",
+    "letter": "L EH T ER",
+    "ink": "IH NG K", "splat": "S P L AE T", "incoming": "IH N K AH M IH NG", "messy": "M EH S IY", "business": "B IH Z N AH S",
+    "big": "B IH G", "splash": "S P L AE SH", "here": "HH IY R", "comes": "K AH M Z", "mess": "M EH S",
+    "letters": "L EH T ER Z", "everywhere": "EH V R IY W EH R", "scatter": "S K AE T ER", "by": "B AY", "pure": "P Y UH R", "tru": "T R UW", "ascii": "AE S K IY",
+}
+
+_LTS_DIGRAPH = [("sh", "SH"), ("ch", "CH"), ("th", "TH"), ("ph", "F"), ("ck", "K"), ("ng", "NG"), ("qu", "K W"),
+                ("oo", "UW"), ("ee", "IY"), ("ea", "IY"), ("ai", "EY"), ("ay", "EY"), ("oa", "OW"), ("ou", "AW"),
+                ("ow", "OW"), ("oi", "OY"), ("oy", "OY"), ("au", "AO"), ("aw", "AO")]
+_LTS_LETTER = {"a": "AE", "b": "B", "c": "K", "d": "D", "e": "EH", "f": "F", "g": "G", "h": "HH", "i": "IH",
+               "j": "JH", "k": "K", "l": "L", "m": "M", "n": "N", "o": "AA", "p": "P", "q": "K", "r": "R",
+               "s": "S", "t": "T", "u": "AH", "v": "V", "w": "W", "x": "K S", "y": "IY", "z": "Z"}
+
+
+def voice_phonemes(word):
+    """Phonemes of one word: the lexicon first, crude spelling rules for anything else."""
+    w = "".join(ch for ch in word.lower() if ch.isalpha())
+    if not w: return []
+    if w in VOICE_LEXICON: return VOICE_LEXICON[w].split()
+    out = []; i = 0
+    if len(w) > 3 and w.endswith("e") and w[-2] not in "aeiouy":      # silent final e
+        w = w[:-1]
+    while i < len(w):
+        for dg, ph in _LTS_DIGRAPH:
+            if w.startswith(dg, i): out += ph.split(); i += len(dg); break
+        else:
+            out += _LTS_LETTER[w[i]].split(); i += 1
+    return out
+
+
+def _fmt_envelope(freqs, F, bw=(110.0, 150.0, 220.0)):
+    """Spectral shape of a vocal tract with three formants (product of three resonance peaks) and a -6 dB/oct tilt."""
+    h = np.ones_like(freqs)
+    for Fi, Bi in zip(F, bw):
+        h = h / np.sqrt(1.0 + ((freqs**2 - Fi**2) / (freqs * Bi + 1e-9))**2)
+    return h * (1.0 / (1.0 + freqs / 1400.0))
+
+
+class VoiceSynth:
+    """phrase -> int16 samples. Deterministic for a given text (own random generator)."""
+    def __init__(self, rate=VOICE_RATE):
+        self.rate = rate; self._cache = {}; self._timing = {}
+
+    # ---- phoneme string -> control tracks and noise events
+    def _plan(self, phones):
+        fr = VOICE_FRAME; sp = VOICE_SPEED
+        F1 = []; F2 = []; F3 = []; AV = []; PW = []; noise = []     # per frame tracks; noise = (start_frame, n_frames, kind, spec, amp)
+        def push(n, f, av, pw=1.0):
+            for _ in range(max(1, n)): F1.append(f[0]); F2.append(f[1]); F3.append(f[2]); AV.append(av); PW.append(pw)
+        def nfr(ms): return max(1, int(round(ms * sp * self.rate / 1000.0 / fr)))
+        last = (500, 1500, 2500)
+        bounds = []; wstart = 0
+        for i, p in enumerate(phones):
+            if p == "_":                                   # word gap
+                bounds.append((wstart, len(F1))); push(nfr(45), last, 0.0); wstart = len(F1); continue
+            nxt = None
+            for q in phones[i + 1:]:
+                if q in _VOW or q in _DIPH or q in _LIQ: nxt = _VOW[q][1] if q in _VOW else (_VOW[_DIPH[q][0]][1] if q in _DIPH else _LIQ[q][1]); break
+            nxt = nxt or last
+            if p in _VOW:
+                d, f = _VOW[p]; push(nfr(d), f, 1.0); last = f
+            elif p in _DIPH:
+                a, b, d = _DIPH[p]; n = nfr(d); fa, fb = _VOW[a][1], _VOW[b][1]
+                for k in range(n):
+                    t = k / max(1, n - 1); t = t * t * (3 - 2 * t)
+                    push(1, tuple(fa[j] + (fb[j] - fa[j]) * t for j in range(3)), 1.0)
+                last = fb
+            elif p in _LIQ:
+                d, f = _LIQ[p]; push(nfr(d), f, 0.8); last = f
+            elif p in _NAS:
+                d, f = _NAS[p]; push(nfr(d), f, 0.45, 0.6); last = f
+            elif p in _FRIC:
+                d, band, amp, voiced = _FRIC[p]; n = nfr(d)
+                start = len(F1); push(n, nxt, 0.28 if voiced else 0.0)
+                noise.append((start, n, "band", band, amp))
+            elif p in _STOP:
+                clo, band, voiced = _STOP[p]; push(nfr(clo), last, 0.25 if voiced else 0.0)
+                bs = len(F1); push(nfr(12), nxt, 0.0); noise.append((bs, nfr(12), "band", band, 0.9))
+                if not voiced:
+                    asp = len(F1); push(nfr(28), nxt, 0.0); noise.append((asp, nfr(28), "form", nxt, 0.45))
+            elif p in _AFF:
+                clo, band, voiced = _AFF[p]; push(nfr(clo), last, 0.2 if voiced else 0.0)
+                bs = len(F1); push(nfr(75), nxt, 0.25 if voiced else 0.0); noise.append((bs, nfr(75), "band", band, 0.85))
+            elif p == "HH":
+                s = len(F1); push(nfr(65), nxt, 0.0); noise.append((s, nfr(65), "form", nxt, 0.55))
+        bounds.append((wstart, len(F1)))
+        self._bounds = bounds
+        return [np.array(x, dtype=np.float64) for x in (F1, F2, F3, AV, PW)], noise
+
+    def timing(self, text):
+        """[(word, start s, end s)] of a phrase as the synthesizer says it."""
+        text = text.strip().lower(); self.render(text)
+        return self._timing.get(text, [])
+
+    def _smooth(self, a, w):
+        if w <= 1 or len(a) < 2: return a
+        k = np.ones(w) / w; pad = np.concatenate([np.full(w, a[0]), a, np.full(w, a[-1])])
+        return np.convolve(pad, k, mode="same")[w:-w]
+
+    def render(self, text):
+        text = text.strip().lower()
+        if text in self._cache: return self._cache[text]
+        phones = []
+        for wi, word in enumerate(w for w in text.split() if voice_phonemes(w)):
+            if wi: phones.append("_")
+            phones += voice_phonemes(word)
+        if not phones:
+            self._cache[text] = np.zeros(1, dtype=np.int16); self._timing[text] = []; return self._cache[text]
+        (F1, F2, F3, AV, PW), noise = self._plan(phones)
+        words = [w for w in text.split() if voice_phonemes(w)]
+        self._timing[text] = [(w, a * VOICE_FRAME / self.rate, b * VOICE_FRAME / self.rate) for w, (a, b) in zip(words, self._bounds)]
+        nF = len(F1); fr = VOICE_FRAME; N = nF * fr; rate = self.rate
+        rng = np.random.default_rng(sum((i + 1) * ord(c) for i, c in enumerate(text)))
+        # coarticulation: glide the formants and the voicing between phonemes
+        F1, F2, F3 = (self._smooth(x, 5) for x in (F1, F2, F3)); AVs = self._smooth(AV, 3); PWs = self._smooth(PW, 3)
+        # pitch: falls through the phrase, a little lift at every word start
+        t = np.arange(N) / rate; dur = N / rate
+        f0 = VOICE_PITCH * (1.0 - 0.18 * (t / max(dur, 1e-3)))
+        # per-sample control (linear interpolation between frames)
+        xs = (np.arange(N) + 0.5) / fr - 0.5; xi = np.arange(nF)
+        s_F = [np.interp(xs, xi, x) for x in (F1, F2, F3)]; s_av = np.interp(xs, xi, AVs); s_pw = np.interp(xs, xi, PWs)
+        phase = np.cumsum(f0 / rate)
+        # voiced source: harmonics shaped by the formant envelope of each frame
+        K = int(min(48, (rate * 0.45) / (VOICE_PITCH * 0.85)))
+        voiced = np.zeros(N)
+        ks = np.arange(1, K + 1)
+        # harmonic amplitudes per frame (frames x K), interpolated to samples
+        fc = (np.arange(nF) + 0.5) * fr; f0c = np.interp(fc, np.arange(N), f0)
+        amps = np.zeros((nF, K))
+        for j in range(nF):
+            fk = ks * f0c[j]
+            amps[j] = _fmt_envelope(fk, (F1[j], F2[j], F3[j])) * (fk < rate * 0.45)
+        amps = amps / max(amps.max(), 1e-9)
+        for k in range(K):
+            a = np.interp(xs, xi, amps[:, k])
+            voiced += a * np.sin(2 * np.pi * (k + 1) * phase)
+        voiced *= s_av * (0.6 + 0.4 * s_pw)
+        # noise events: fricatives, bursts and aspiration, filtered in the frequency domain
+        nz = np.zeros(N)
+        for (sf, nfm, kind, spec, amp) in noise:
+            a0 = sf * fr; n = nfm * fr
+            if a0 + n > N: n = N - a0
+            if n <= 8: continue
+            w = rng.standard_normal(n); W = np.fft.rfft(w); fq = np.fft.rfftfreq(n, 1.0 / rate)
+            if kind == "band":
+                lo, hi = spec; mask = 1.0 / (1.0 + (lo / np.maximum(fq, 1.0))**4) / (1.0 + (fq / hi)**4)
+            else:
+                mask = _fmt_envelope(np.maximum(fq, 20.0), spec, bw=(160.0, 220.0, 320.0)) * 6.0
+            seg = np.fft.irfft(W * mask, n)
+            seg = seg / max(np.abs(seg).max(), 1e-9)
+            env = np.minimum(1.0, np.arange(n) / max(1.0, n * 0.25)) * np.minimum(1.0, (n - np.arange(n)) / max(1.0, n * 0.35))
+            if kind == "band" and n < 12 * fr: env = env * np.exp(-np.arange(n) / (n * 0.7))        # bursts die quickly
+            nz[a0:a0 + n] += seg * env * amp
+        sig = voiced / max(np.abs(voiced).max(), 1e-9) * 0.62 + nz * 0.45
+        fade = int(rate * 0.004); sig[:fade] *= np.linspace(0, 1, fade); sig[-fade:] *= np.linspace(1, 0, fade)
+        sig = np.concatenate([sig, np.zeros(int(rate * 0.03))])
+        if VOICE_CRUSH: sig = np.round(sig * VOICE_CRUSH) / VOICE_CRUSH
+        peak = max(np.abs(sig).max(), 1e-9)
+        out = (sig / peak * 0.9 * VOICE_VOL * 32767).astype(np.int16)
+        self._cache[text] = out
+        return out
+
+
+# ====================== POPUPS ======================
+class Popup:
+    """Floating panel drawn over everything. While one is open it owns the mouse and the keyboard."""
+    def draw(self, app, surf, mx, my): pass
+    def on_click(self, app, mx, my, button): app.popup = None
+    def on_key(self, app, key):
+        if key == pygame.K_ESCAPE: app.popup = None
+    def on_text(self, app, ch): pass
+
+
+class PaletteEditorPopup(Popup):
+    """Editor of the current palette: its bar on top (click a slot to select it, drag to reorder, - and + at the
+    corners to remove / add shading levels), a table of characters to put into the selected slot, and the
+    RESTORE / SAVE / SAVE NEW buttons. Every change is applied to the palette at once (live)."""
+    BUTTONS = ("RESTORE", "SAVE", "SAVE NEW", "CLOSE")
+
+    def __init__(self, app, idx):
+        self.chars = app.table_chars()
+        self.cw = app.char_w + 8; self.chh = app.char_h + 4; self.cols = TABLE_COLS
+        self.rows = -(-len(self.chars) // self.cols); self.pad = 10
+        self.fh = app.font_ui.get_height() + 8
+        self.btn_w = 22; self.barh = app.char_h + 10; self.bh = app.font_ui.get_height() + 6
+        self.sel = max(0, min(idx, app.pal.n - 2)); self.status = ""; self.drag_idx = None; self.moved = False; self.jump_until = 0
+        w = self.cols * self.cw + 2 * self.pad
+        h = self.fh + self.barh + self.fh + self.rows * self.chh + 8 + self.bh + self.pad + 2
+        x = (app.canvas_px_w - w) // 2; y = app.canvas_offset_y + (app.canvas_px_h - h) // 2
+        x = max(4, min(x, app.surface_w - w - 4)); y = max(4, min(y, app.surface_h - h - 4))
+        self.rect = pygame.Rect(x, y, w, h)
+        by = y + self.fh
+        self.minus = pygame.Rect(x + self.pad, by, self.btn_w, self.barh)
+        self.plus = pygame.Rect(self.rect.right - self.pad - self.btn_w, by, self.btn_w, self.barh)
+        self.bar = pygame.Rect(self.minus.right + 4, by, self.plus.x - 4 - (self.minus.right + 4), self.barh)
+        self.gx = x + self.pad; self.gy = by + self.barh + self.fh
+        self.foot_y = self.gy + self.rows * self.chh + 6
+        fw = [app.font_ui.size(t)[0] + 16 for t in self.BUTTONS]
+        self.btns = []; bx = x + self.pad
+        for t, wd in zip(self.BUTTONS, fw):
+            self.btns.append((t, pygame.Rect(bx, self.foot_y, wd, self.bh))); bx += wd + 6
+
+    @property
+    def max_n(self): return max(PAL_MIN_SLOTS, min(PAL_MAX_SLOTS, self.bar.w // 9))
+
+    # ---- geometry
+    def slot_rect(self, app, idx):
+        """Rect of palette position idx in the bar (same display order as the main bar)."""
+        n = app.pal.n; ui = (n - 1 - idx) if PALETTE_BAR_DARK_TO_LIGHT else idx
+        a = self.bar.x + ui * self.bar.w // n; b = self.bar.x + (ui + 1) * self.bar.w // n
+        return pygame.Rect(a, self.bar.y, max(1, b - a), self.bar.h)
+
+    def slot_at(self, app, mx, my):
+        n = app.pal.n
+        if not self.bar.collidepoint(mx, my): return None
+        ui = min(n - 1, max(0, (mx - self.bar.x) * n // self.bar.w))
+        return (n - 1 - ui) if PALETTE_BAR_DARK_TO_LIGHT else ui
+
+    def cell_rect(self, i):
+        r, c = divmod(i, self.cols)
+        return pygame.Rect(self.gx + c * self.cw, self.gy + r * self.chh, self.cw, self.chh)
+
+    def index_at(self, mx, my):
+        c = (mx - self.gx) // self.cw; r = (my - self.gy) // self.chh
+        if 0 <= c < self.cols and 0 <= r < self.rows:
+            i = r * self.cols + c
+            if i < len(self.chars): return i
+        return None
+
+    def button_enabled(self, app, name):
+        nn = app.pal.index; known = nn in app.pal.map; edited = nn in app.pal.edits
+        if name == "CLOSE": return True
+        if name in ("RESTORE", "SAVE"): return known and edited
+        if name == "SAVE NEW": return known and any(k not in app.pal.map for k in range(1, 11))
+        return False
+
+    # ---- actions
+    def say(self, app, msg): self.status = msg; app.flash(msg)
+
+    def add_slot(self, app):
+        if app.pal.insert_slot(self.sel, self.max_n): app.play_ui_click(); self.status = ""
+        else: self.say(app, "MAX SLOTS" if app.pal.n >= self.max_n else "CANNOT ADD HERE")
+
+    def remove_slot(self, app):
+        if app.pal.remove_slot(self.sel):
+            app.play_ui_click(); self.status = ""; self.sel = min(self.sel, app.pal.n - 2)
+        else: self.say(app, "MIN SLOTS")
+
+    def press_button(self, app, name):
+        nn = app.pal.index
+        if name == "CLOSE": app.popup = None; return
+        if not self.button_enabled(app, name): return
+        if name == "RESTORE": app.pal.restore(nn); self.sel = min(self.sel, app.pal.n - 2); self.say(app, f"RESTORED {nn:02d}"); app.speak("palette restored")
+        elif name == "SAVE": ok, msg = app.pal.save(nn); self.say(app, msg); ok and app.speak("palette saved")
+        elif name == "SAVE NEW": ok, msg = app.pal.save_new(nn); self.say(app, msg); ok and app.speak("palette saved")
+        app.play_ui_click()
+
+    # ---- input
+    def on_click(self, app, mx, my, button):
+        if button != 1 or not self.rect.collidepoint(mx, my): return
+        if self.minus.collidepoint(mx, my): self.remove_slot(app); return
+        if self.plus.collidepoint(mx, my): self.add_slot(app); return
+        i = self.slot_at(app, mx, my)
+        if i is not None:
+            if i >= app.pal.n - 1: self.say(app, "THE DARKEST SLOT STAYS EMPTY")
+            else: self.sel = i; self.drag_idx = i; self.moved = False; app.play_ui_click()
+            return
+        for name, r in self.btns:
+            if r.collidepoint(mx, my): self.press_button(app, name); return
+        k = self.index_at(mx, my)
+        if k is not None and app.pal.set_char(self.sel, self.chars[k]):
+            app.play_ui_click(); self.status = ""
+
+    def on_drag(self, app, mx, my):
+        """Dragging a slot along the bar moves its character."""
+        if self.drag_idx is None: return
+        j = self.slot_at(app, mx, my)
+        if j is None or j >= app.pal.n - 1 or j == self.drag_idx: return
+        if app.pal.move_slot(self.drag_idx, j): self.drag_idx = self.sel = j; self.moved = True
+
+    def on_release(self, app): self.drag_idx = None
+
+    def on_key(self, app, key):
+        if key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER): app.popup = None
+        elif key == pygame.K_LEFT:  self.sel = min(app.pal.n - 2, self.sel + 1) if PALETTE_BAR_DARK_TO_LIGHT else max(0, self.sel - 1)
+        elif key == pygame.K_RIGHT: self.sel = max(0, self.sel - 1) if PALETTE_BAR_DARK_TO_LIGHT else min(app.pal.n - 2, self.sel + 1)
+
+    def on_text(self, app, ch):
+        """Typing a character puts it into the selected slot and the table jumps to it (the +/- buttons add/remove slots)."""
+        if len(ch) != 1 or not ch.isprintable(): return
+        if ch.isspace(): self.say(app, "ONLY THE DARKEST SLOT IS A SPACE"); return
+        if ch not in self.chars: self.say(app, f"'{ch}' IS NOT IN THE FONT"); return
+        if self.sel >= app.pal.n - 1: return
+        app.pal.set_char(self.sel, ch)
+        self.jump_until = pygame.time.get_ticks() + 450; self.status = ""
+        app.play_ui_click()
+
+    # ---- drawing
+    def _small_btn(self, app, surf, r, label, enabled, hov):
+        pygame.draw.rect(surf, HOVER_FILL if (hov and enabled) else GREY10, r, 0, border_radius=3)
+        col = (WHITE if hov else GREY_TEXT) if enabled else GREY50
+        pygame.draw.rect(surf, col, r, 1, border_radius=3)
+        t = app.font_ui.render(label, True, col)
+        surf.blit(t, (r.x + (r.w - t.get_width()) // 2, r.y + (r.h - t.get_height()) // 2))
+
+    def draw(self, app, surf, mx, my):
+        pal = app.pal; n = pal.n; f = app.font_ui
+        if self.sel > n - 2: self.sel = max(0, n - 2)
+        pygame.draw.rect(surf, BLACK, self.rect); pygame.draw.rect(surf, CYAN, self.rect, 1)
+        edited = pal.index in pal.edits
+        surf.blit(f.render(f"EDIT {pal.display_name}" + (" *" if edited else ""), True, RED if edited else CYAN), (self.rect.x + self.pad, self.rect.y + 5))
+        # the palette bar
+        self._small_btn(app, surf, self.minus, "-", n > PAL_MIN_SLOTS, self.minus.collidepoint(mx, my))
+        self._small_btn(app, surf, self.plus, "+", n < self.max_n, self.plus.collidepoint(mx, my))
+        pygame.draw.rect(surf, GREY50, self.bar, 1)
+        hov_slot = self.slot_at(app, mx, my)
+        for idx in range(n):
+            r = self.slot_rect(app, idx); last = idx == n - 1
+            if idx == self.sel: pygame.draw.rect(surf, (0, 60, 70), r.inflate(-2, -2)); pygame.draw.rect(surf, CYAN, r.inflate(-2, -2), 2)
+            elif idx == hov_slot and not last: pygame.draw.rect(surf, HOVER_FILL, r.inflate(-2, -2))
+            if last: pygame.draw.line(surf, GREY50, (r.x + 3, r.centery), (r.right - 4, r.centery), 1)   # the darkest slot: locked
+            else:
+                g = app.glyphs.get(pal.chars[idx], WHITE if idx == self.sel else GREY_TEXT)
+                surf.blit(g, (r.centerx - g.get_width() // 2, r.centery - g.get_height() // 2))
+        # info row
+        cur = pal.chars[self.sel] if self.sel < n - 1 else " "
+        left = f"SLOT {n - 1 - self.sel} OF {n - 1}:  '{cur}'   {n} LEVELS"
+        surf.blit(f.render(left, True, GREY_TEXT), (self.rect.x + self.pad, self.bar.bottom + 5))
+        hov = self.index_at(mx, my)
+        right = self.status or ("TYPE A CHARACTER OR DRAG A SLOT" if hov is None else f"'{self.chars[hov]}'  U+{ord(self.chars[hov]):04X}")
+        rt = f.render(right, True, WHITE if self.status else GREY)
+        surf.blit(rt, (self.rect.right - self.pad - rt.get_width(), self.bar.bottom + 5))
+        # the table
+        for i, ch in enumerate(self.chars):
+            r = self.cell_rect(i)
+            if i == hov: pygame.draw.rect(surf, HOVER_FILL, r); pygame.draw.rect(surf, WHITE, r, 1)
+            elif ch == cur:
+                if pygame.time.get_ticks() < self.jump_until: pygame.draw.rect(surf, (0, 60, 70), r)
+                pygame.draw.rect(surf, CYAN, r, 2 if pygame.time.get_ticks() < self.jump_until else 1)
+            surf.blit(app.glyphs.get(ch, WHITE if (i == hov or ch == cur) else GREY_TEXT), (r.x + 4, r.y + 2))
+        # buttons
+        for name, r in self.btns:
+            self._small_btn(app, surf, r, name, self.button_enabled(app, name), r.collidepoint(mx, my))
+
+
+class MenuPopup(Popup):
+    """Small list of actions. items = [(label, function(app) or None when disabled)]."""
+    def __init__(self, app, title, items, pos):
+        self.title = title; self.items = items
+        self.lh = app.font_ui.get_height() + 6
+        w = max(app.font_ui.size(t)[0] for t in [title] + [l for l, _ in items]) + 24
+        h = self.lh * (len(items) + 1) + 8
+        x = max(2, min(pos[0], app.surface_w - w - 2)); y = max(2, min(pos[1], app.surface_h - h - 2))
+        self.rect = pygame.Rect(x, y, w, h)
+
+    def item_rect(self, i):
+        return pygame.Rect(self.rect.x + 4, self.rect.y + 4 + self.lh * (i + 1), self.rect.w - 8, self.lh)
+
+    def draw(self, app, surf, mx, my):
+        pygame.draw.rect(surf, BLACK, self.rect); pygame.draw.rect(surf, CYAN, self.rect, 1)
+        surf.blit(app.font_ui.render(self.title, True, CYAN), (self.rect.x + 10, self.rect.y + 7))
+        for i, (label, fn) in enumerate(self.items):
+            r = self.item_rect(i)
+            hov = fn is not None and r.collidepoint(mx, my)
+            if hov: pygame.draw.rect(surf, HOVER_FILL, r)
+            col = (WHITE if hov else GREY_TEXT) if fn is not None else GREY50
+            surf.blit(app.font_ui.render(label, True, col), (r.x + 6, r.y + 3))
+
+    def on_click(self, app, mx, my, button):
+        fn = None
+        if button == 1:
+            for i, (label, f) in enumerate(self.items):
+                if self.item_rect(i).collidepoint(mx, my): fn = f
+        app.popup = None
+        if fn is not None: fn(app)
+
+
 # ====================== APP ======================
 class App:
     def __init__(self):
@@ -1272,6 +1980,14 @@ class App:
         self.processing_active = False
         self.processing_ticks = 0
 
+        self.popup = None                    # floating character table / palette menu
+        self.bombs = []                      # bombs in flight (fuse, flash or blast)
+        self._bomb_snds = None
+        self._tip_key = None; self._tip_since = 0
+        self._last_sphere_click = None       # (ticks, palette char index) for double click on the tone sphere
+        self._last_bar_click = None          # (ticks, palette char index) for double-click detection
+        self.opacity_slider_rect = None
+        self._table_chars = None
         self.overlay_image = None
         self.overlay_src = None      # original overlay image (rescaled when the canvas is resized)
         self.overlay_visible = False
@@ -1280,6 +1996,7 @@ class App:
         self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
         self.font_small = pygame.font.SysFont(FONT_NAME, max(10, FONT_SIZE-2))
         self.font_ui = pygame.font.SysFont(FONT_NAME, UI_FONT_SIZE)
+        self.font_tl = pygame.font.SysFont(FONT_NAME, 11)          # tiny font for the T.LAPSE row
         self.font_help = pygame.font.SysFont(FONT_NAME, HELP_FONT_SIZE)
         self.char_w, self.char_h = self.font.size("M")
         self.glyphs = GlyphCache(self.font)
@@ -1343,8 +2060,17 @@ class App:
         # UI rects
         self.sidebar_rect = pygame.Rect(self.canvas_px_w, 0, SIDEBAR_W, self.surface.get_height())
         self.picker_rect  = pygame.Rect(self.canvas_px_w+UI_MARGIN, UI_MARGIN, PICKER_SIZE, PICKER_SIZE)
-        self.palette_rect = pygame.Rect(self.canvas_px_w+UI_MARGIN, self.picker_rect.bottom+UI_MARGIN,
+        _hb = self._indicator_box_size()[1]
+        _stack_bottom = self.picker_rect.top + 6*_hb + 5*IND_GAP_Y                 # bottom of the HLIGHT..LINEAA stack
+        self.tl_rect = pygame.Rect(self.canvas_px_w+UI_MARGIN, max(self.picker_rect.bottom, _stack_bottom)+TL_ROW_GAP,
+                                   SIDEBAR_W-2*UI_MARGIN, TL_ROW_H)            # T.LAPSE row (parts computed per draw)
+        self._tl_wipe_until = 0
+        self.palette_rect = pygame.Rect(self.canvas_px_w+UI_MARGIN, self.tl_rect.bottom+TL_ROW_GAP,
                                         SIDEBAR_W-2*UI_MARGIN, PALETTE_BAR_H)
+
+        # Palette shortcut bar (slots are computed from this rect, so it moves with the sidebar)
+        self.palslot_rect = pygame.Rect(self.canvas_px_w+UI_MARGIN, self.palette_rect.bottom+PAL_SLOT_BAR_GAP,
+                                        SIDEBAR_W-2*UI_MARGIN, PAL_SLOT_H)
 
         # Indicators
         self.ind_labels = ["HLIGHT","SOFT","PAINT","BLUR","LINE","LINEAA"]
@@ -1354,7 +2080,7 @@ class App:
         BTN_GAP = 4
         self.btn_h = 24
         self.btn_w = (SIDEBAR_W - 2*UI_MARGIN - 3*BTN_GAP)//4
-        row1_y = self.palette_rect.bottom + UI_MARGIN//2
+        row1_y = self.palslot_rect.bottom + UI_MARGIN//2
         left_x = self.canvas_px_w + UI_MARGIN
         step = self.btn_w + BTN_GAP
         self.new_btn    = pygame.Rect(left_x,          row1_y, self.btn_w, self.btn_h)
@@ -1371,12 +2097,18 @@ class App:
 
         row3_y = row2_y + self.btn_h + BTN_GAP
         self.smudge_btn = pygame.Rect(left_x, row3_y, half_w, self.btn_h)
+        self.bomb_btn = pygame.Rect(left_x + half_w + BTN_GAP, row3_y, half_w, self.btn_h)
+
+        row4_y = row3_y + self.btn_h + BTN_GAP
+        self.tru_btn = pygame.Rect(left_x, row4_y, SIDEBAR_W - 2*UI_MARGIN, self.btn_h)
 
         # Grid UI elements (below the button rows)
-        grid_top = row3_y + self.btn_h + UI_MARGIN//2
+        grid_top = row4_y + self.btn_h + UI_MARGIN//2
         checkbox_size = 16
         self.grid_checkbox_rect = pygame.Rect(self.canvas_px_w+UI_MARGIN, grid_top, checkbox_size, checkbox_size)
         self.grid_label_rect = pygame.Rect(self.grid_checkbox_rect.right+8, grid_top, 80, checkbox_size)
+        self.voice_checkbox_rect = pygame.Rect(self.canvas_px_w + UI_MARGIN + 142, grid_top, checkbox_size, checkbox_size)
+        self.voice_label_rect = pygame.Rect(self.voice_checkbox_rect.right + 6, grid_top, 60, checkbox_size)
 
         y2 = grid_top + checkbox_size + 4
         btn_w_small, btn_h_small = 22, 20
@@ -1394,11 +2126,17 @@ class App:
         self.current_value = 0.2       # start somewhat light to paint on dark bg
         self.brush_radius  = INITIAL_BRUSH_RADIUS
         self.brush_alpha   = 1.0
+        self.fade_on = False; self.fade_speed = 0.5            # FADE: the stroke starts at the chosen opacity and dies out along its path
+        self.fade_dist = 0.0; self.fade_last = None            # distance travelled by the current stroke (in cells), last cell seen
+        self.fade_box_rect = self.fade_label_rect = self.fade_slider_rect = None; self._op_slider_geom = None
         self.soft_edge = False
         self.line_aa   = True
 
         # Modes: 'paint' | 'blur' | 'line' | 'hlight'
         self.mode = "paint"
+        self.tru_cursor = None          # (col,row) of the TRU typing cursor
+        self.voice_on = VOICE_ON_DEFAULT; self.voice = VoiceSynth(); self._voice_snd = {}; self.last_spoken = ""
+        self._voice_rng = random.Random(); self._voice_mode = "paint"; self.caption = None
         self.prev_mode = "paint"
         self.shift_blur = False
         self.shift_from_hlight = False
@@ -1481,55 +2219,87 @@ class App:
             surf.blit(self.overlay_image, (0, oy))
 
 
+    def _tl_parts(self):
+        """Rects of the T.LAPSE row: REC button, frame bar, frame count, GIF and CLR buttons."""
+        r = self.tl_rect; f = self.font_tl
+        clr = pygame.Rect(r.right - 34, r.y, 34, r.h)
+        exp = pygame.Rect(clr.x - 4 - 34, r.y, 34, r.h)
+        cw = f.size("0000")[0] + 4
+        cnt = pygame.Rect(exp.x - 4 - cw, r.y, cw, r.h)
+        rec = pygame.Rect(r.x, r.y, 46, r.h)
+        bx = rec.right + 4
+        bar = pygame.Rect(bx, r.y + (r.h - 6) // 2, max(10, cnt.x - 4 - bx), 6)
+        return {"rec": rec, "bar": bar, "cnt": cnt, "exp": exp, "clr": clr}
+
+    def _tl_btn(self, surf, rect, label, color, active=False, dot=None):
+        pygame.draw.rect(surf, GREY10, rect, 0, border_radius=3)
+        pygame.draw.rect(surf, color, rect, 2 if active else 1, border_radius=3)
+        t = self.font_tl.render(label, True, color)
+        tx = rect.x + (rect.w - t.get_width()) // 2 + (4 if dot is not None else 0)
+        surf.blit(t, (tx, rect.y + (rect.h - t.get_height()) // 2))
+        if dot is not None:                                   # small record dot: filled when shown, ring when off
+            c = (rect.x + 7, rect.centery)
+            if dot: pygame.draw.circle(surf, color, c, 3)
+            else: pygame.draw.circle(surf, color, c, 3, 1)
+
     def draw_tl_progress_bar(self, surf):
-        """
-        Draw a single-line progress bar for timelapse:
-        - placed below the tone sphere and above the palette bar
-        - white baseline; red fill proportional to frames/max_frames
-        """
-        # We need anchors: the tone sphere rect and sidebar geometry
-        if not hasattr(self, "picker_rect"):
-            return
+        """T.LAPSE row under the tone sphere:  [o REC] [=====-----] 0600 [GIF] [CLR]  (tiny, ASCII-style)."""
+        self._ensure_timelapse(); tl = self.tl
+        P = self._tl_parts(); ticks = pygame.time.get_ticks()
+        n = len(tl.frames); mx_ = max(1, int(getattr(tl, "max_frames", TIMELAPSE_MAX_FRAMES)))
+        busy = self.tl_exporting; on = bool(tl.enabled)
+        sx, sy = pygame.mouse.get_pos(); sx, sy = int(sx / WINDOW_SCALE), int(sy / WINDOW_SCALE)
+        hot = lambda k: P[k].collidepoint(sx, sy)
+        # REC
+        rc = RED if on else (WHITE if hot("rec") else GREY50)
+        self._tl_btn(surf, P["rec"], "REC", rc, active=on, dot=bool(on and (ticks // 500) % 2 == 0))
+        # bar + count
+        b = P["bar"]
+        pygame.draw.rect(surf, GREY50 if not on else WHITE, b, 1, border_radius=3)
+        if n > 0:
+            fw = max(2, int(round((b.w - 2) * min(1.0, n / float(mx_)))))
+            pygame.draw.rect(surf, RED if on else (150, 60, 60), pygame.Rect(b.x + 1, b.y + 1, fw, b.h - 2), 0, border_radius=2)
+        c = P["cnt"]; full = n >= 0.9 * mx_
+        ct = self.font_tl.render(f"{n:04d}" if not busy else "EXP", True, RED if (full or busy) else (GREY_TEXT if n else GREY50))
+        surf.blit(ct, (c.right - ct.get_width(), c.y + (c.h - ct.get_height()) // 2))
+        # GIF / CLR
+        can = n > 0 and not busy
+        self._tl_btn(surf, P["exp"], "GIF", (WHITE if hot("exp") else GREY_TEXT) if can else GREY50)
+        armed = ticks < self._tl_wipe_until
+        self._tl_btn(surf, P["clr"], "OK?" if armed else "CLR", RED if armed else ((WHITE if hot("clr") else GREY_TEXT) if can else GREY50), active=armed)
 
-        # Compute bar rect: align to palette bar width if available, otherwise to sidebar width
-        x = self.canvas_px_w + TL_BAR_MARGIN_X
-        w = SIDEBAR_W - 2 * TL_BAR_MARGIN_X
-        y = self.picker_rect.bottom + TL_BAR_GAP_FROM_SPHERE
-        h = max(1, int(globals().get("TL_BAR_HEIGHT", 3)))
+    def tl_toggle(self):
+        self._ensure_timelapse(); self.tl.enabled = not self.tl.enabled
+        print("[TL] Recording:", "ON" if self.tl.enabled else "OFF")
+        self.speak("timelapse start" if self.tl.enabled else "timelapse stop")
 
-        # If your code already has a palette bar rect, reuse its x/w for perfect alignment
-        pal_rect = getattr(self, "palbar_rect", None) or getattr(self, "palette_bar_rect", None)
-        if pal_rect:
-            x, w = pal_rect.x, pal_rect.w
+    def tl_wipe(self):
+        self._ensure_timelapse(); self.tl.reset()
+        self.tl_last_interval_ms = 0; self.tl_full_prompted = False; self._tl_wipe_until = 0
+        print("[TL] Frames cleared.")
+        self.speak("timelapse cleared")
 
-        bar_rect = pygame.Rect(x, y, w, h)
-
-        # Draw white baseline
-        pygame.draw.rect(surf, WHITE, bar_rect, 0, border_radius=h//2)
-
-        # Compute fill based on tl frames / max_frames
-        self._ensure_timelapse()
-        tl = getattr(self, "tl", None)
-        if not tl:
-            return
-
-        max_frames = int(getattr(tl, "max_frames", globals().get("TIMELAPSE_MAX_FRAMES", 2000)))
-        cur_frames = int(len(tl.frames))
-        if max_frames <= 0 or cur_frames <= 0:
-            return
-
-        ratio = min(1.0, cur_frames / float(max_frames))
-        fill_w = max(1, int(round(w * ratio)))
-
-        fill_rect = pygame.Rect(x, y, fill_w, h)
-        pygame.draw.rect(surf, RED, fill_rect, 0, border_radius=h//2)
-
-
+    def tl_row_click(self, mx, my, button=1):
+        """Click on the T.LAPSE row. Always swallows the click (it must never paint)."""
+        if button != 1: return True
+        P = self._tl_parts(); self._ensure_timelapse(); n = len(self.tl.frames)
+        if P["rec"].collidepoint(mx, my):
+            self.play_ui_click(); self.tl_toggle()
+        elif P["exp"].collidepoint(mx, my):
+            if n > 0 and not self.tl_exporting:
+                self.play_ui_click(); self.tl_export_via_dialog(); self._release_mouse_state()
+        elif P["clr"].collidepoint(mx, my):
+            if n > 0:
+                self.play_ui_click(); now = pygame.time.get_ticks()
+                if now < self._tl_wipe_until: self.tl_wipe()                 # second click: do it
+                else: self._tl_wipe_until = now + TL_WIPE_ARM_MS            # first click: ask OK?
+        return True
 
     def _ensure_timelapse(self):
         """Make sure self.tl exists (lazy init)."""
         if getattr(self, "tl", None) is None:
             self.tl = TimelapseRecorder(TIMELAPSE_TARGET_COLS, TIMELAPSE_MAX_FRAMES)
+            self.tl.enabled = bool(TL_START_ON)
 
     def draw_tlapse_indicator_below(self, surf, anchor_rect):
         if not anchor_rect:
@@ -1635,6 +2405,7 @@ class App:
             tl.enabled = prev_enabled
 
         if ok:
+            self.speak("gif ready")
             try: open_folder(os.path.dirname(out_path) or ".")
             except Exception: pass
         return ok
@@ -1765,6 +2536,8 @@ class App:
             return "SMART BRUSH"
         if self.mode == "smudge":
             return "SMUDGE"
+        if self.mode == "bomb":
+            return "BOMB"
 
         # 5) Botões do mouse
         if self.left_down:
@@ -1833,8 +2606,8 @@ class App:
 
         oy = getattr(self, 'canvas_offset_y', 0)
         in_canvas = (0 <= mx < self.canvas_px_w) and (oy <= my < oy + self.canvas_px_h)
-        # Durante HELP, mantemos o cursor visível (links clicáveis)
-        want_hidden = in_canvas and (not self.show_help)
+        # Durante HELP e dentro de popups (editor de paleta, menus) o cursor fica visível: ali não há anel de pincel
+        want_hidden = in_canvas and (not self.show_help) and (not self.popup)
 
         if want_hidden and not self.cursor_hidden:
             try: pygame.mouse.set_visible(False)
@@ -1847,6 +2620,7 @@ class App:
 
 
     def undo(self):
+        if self.blast_busy(): return
         if self.undo_stack:
             buf,col,ov=self.undo_stack.pop()
             if buf.shape != self.canvas.buf.shape:       # the undone step changed the canvas size
@@ -1857,7 +2631,7 @@ class App:
     # ---------- dynamic canvas size ----------
     def flash(self, msg, ms=FLASH_MS):
         self.flash_msg = msg; self.flash_until = pygame.time.get_ticks() + ms
-        print("[CANVAS]", msg)
+        print("[MSG]", msg)
 
     def _fit_window(self, floor):
         """Pick WINDOW_SCALE so the whole surface fits the desktop (never above the configured scale)."""
@@ -1984,7 +2758,7 @@ class App:
 
     def canvas_resize_key(self, key, shrink):
         """Ctrl+Arrow grows that side, Ctrl+Shift+Arrow removes up to one step of EMPTY cells from that side."""
-        if self.stroke_started or self.left_down or self.right_down or self.mid_down: return
+        if self.stroke_started or self.left_down or self.right_down or self.mid_down or self.bombs: return
         dc, dr = CANVAS_GROW_COLS, CANVAS_GROW_ROWS
         if shrink: dc, dr = -dc, -dr
         if   key == pygame.K_LEFT:  self.resize_canvas(left=dc)
@@ -2078,8 +2852,10 @@ class App:
                     self.canvas.buf[r,c]=self.pal.value_from_idx(idx)
                 elif ch in self.edge.tone_of:            # an edge-set character: keep it as a Smart Edge override
                     self.canvas.buf[r,c]=self.edge.tone_of[ch]; self.canvas.ov[r,c]=ord(ch)
+                elif ch.isprintable() and not ch.isspace() and self.char_tone(ch) is not None:
+                    self.canvas.buf[r,c]=self.char_tone(ch); self.canvas.ov[r,c]=ord(ch)    # any other drawable character (TRU mode text) stays as typed
                 else:
-                    self.canvas.buf[r,c]=dark_val        # char not in the palette or edge set -> empty
+                    self.canvas.buf[r,c]=dark_val        # not drawable by the font -> empty
         self.canvas.col[:,:]=TEXT_LUMA
     def import_image_to_canvas(self,path):
         try:
@@ -2350,6 +3126,10 @@ class App:
             pygame.draw.rect(surf, WHITE, inner, 0)
         label = self.font_ui.render('GRID (cells)', True, WHITE if self.grid_enabled else GREY)
         surf.blit(label, (self.grid_label_rect.x, self.grid_label_rect.y))
+        pygame.draw.rect(surf, WHITE, self.voice_checkbox_rect, 1)
+        if self.voice_on: pygame.draw.rect(surf, WHITE, self.voice_checkbox_rect.inflate(-6, -6), 0)
+        vl = self.font_ui.render('VOICE', True, WHITE if self.voice_on else GREY)
+        surf.blit(vl, (self.voice_label_rect.x, self.voice_label_rect.y))
 
         # --- coords indicator (cell under cursor) ---
         # show 1-based indices; fallback to '-' when outside
@@ -2504,15 +3284,234 @@ class App:
             self.palette_sel_rect=sel_rect
             pygame.draw.rect(surf,CYAN,self.palette_sel_rect,2)
 
+    def _pal_slot_rects(self):
+        """All 10 slots [(rect, nn)] at fixed positions (nn 1..10, same numbers as SHIFT+1..0)."""
+        r = self.palslot_rect; w = (r.w - 9*PAL_SLOT_GAP)//10
+        return [(pygame.Rect(r.x + i*(w + PAL_SLOT_GAP), r.y, w, r.h), i + 1) for i in range(10)]
+
+    def _pal_slots(self):
+        """Slots of the palettes that exist in PAL.txt."""
+        return [(r, nn) for r, nn in self._pal_slot_rects() if nn in self.pal.map]
+
+    def draw_pal_slots(self, surf, mx=-1, my=-1):
+        for rect, nn in self._pal_slot_rects():
+            exists = nn in self.pal.map
+            cur = exists and self.pal.index == nn
+            edited = exists and nn in self.pal.edits
+            hov = exists and rect.collidepoint(mx, my)
+            pygame.draw.rect(surf, HOVER_FILL if hov else GREY10, rect, 0, border_radius=3)
+            if not exists:
+                bcol = tcol = (60, 60, 60)
+            else:
+                tcol = RED if edited else (CYAN if cur else (WHITE if hov else GREY_TEXT))
+                bcol = RED if edited else (CYAN if cur else (WHITE if hov else GREY50))
+            pygame.draw.rect(surf, bcol, rect, 2 if (cur or edited) else 1, border_radius=3)
+            t = self.font_ui.render(str(nn % 10), True, tcol)
+            surf.blit(t, (rect.x + (rect.w - t.get_width())//2, rect.y + (rect.h - t.get_height())//2))
+
+    # ---------- bomb ----------
+    def _bomb_sounds(self):
+        """(fuse Sound, explosion Sound, fuse ms) - your own files if present, otherwise generated."""
+        if self._bomb_snds is None:
+            fuse = boom = None; fuse_ms = BOMB_FUSE_MS
+            try:
+                init = pygame.mixer.get_init()
+                if init:
+                    freq, _fmt, ch = init
+                    def load(name):
+                        p = find_asset(name)
+                        return pygame.mixer.Sound(str(p)) if p else None
+                    fuse, boom = load("sounds/bomb_fuse.wav"), load("sounds/bomb_explosion.wav")
+                    gf, gb = bomb_sound_arrays(freq)
+                    def mk(a):
+                        a = (np.clip(a, -1, 1) * 32767).astype(np.int16)
+                        return pygame.sndarray.make_sound(np.ascontiguousarray(a if ch == 1 else np.column_stack([a] * ch)))
+                    if fuse is None: fuse = mk(gf)
+                    else: fuse_ms = int(max(600, min(4000, fuse.get_length() * 1000)))
+                    if boom is None: boom = mk(gb)
+            except Exception as e:
+                print("[BOMB] sound not available:", e); fuse = boom = None
+            self._bomb_snds = (fuse, boom, fuse_ms)
+        return self._bomb_snds
+
+    def blast_busy(self):
+        return any(b.phase in ("flash", "blast") for b in self.bombs)
+
+    def place_bomb(self, cell, now=None, seed=None):
+        """Light a bomb at this cell. The blast radius follows the brush radius."""
+        now = pygame.time.get_ticks() if now is None else now
+        fuse, boom, fuse_ms = self._bomb_sounds()
+        b = Bomb(cell[0], cell[1], bomb_radius(self.brush_radius), now, self.brush_alpha, fuse_ms, seed)
+        self.bombs.append(b)
+        self.speak(self._voice_rng.choice(VOICE_BOMB_LINES))
+        if fuse is not None and self.sound_enabled:
+            try: fuse.play(); b.fuse_snd = fuse
+            except Exception: pass
+        return b
+
+    def _set_ink(self, ink):
+        self.canvas.buf[:, :] = (1.0 - ink).astype(np.float32)
+
+    def update_bombs(self, now):
+        """Advance every bomb: fuse -> flash -> blast -> done. The canvas changes only in flash/blast."""
+        for b in list(self.bombs):
+            if b.phase == "fuse":
+                if now - b.t0 >= b.fuse_ms and not self.blast_busy():
+                    ink = 1.0 - self.canvas.buf.astype(np.float64)
+                    b.plan = bomb_plan(ink, b.cx, b.cy, b.R, self.canvas.aspect, b.rng, b.alpha)
+                    self.push_undo()                                   # one Ctrl+Z takes the whole explosion back
+                    self.canvas.ov[b.plan.disc] = 0
+                    self._set_ink(b.plan.flash_ink())
+                    b.phase = "flash"; b.t_flash = now
+                    try:
+                        if b.fuse_snd: b.fuse_snd.stop()
+                        boom = self._bomb_sounds()[1]
+                        if boom is not None and self.sound_enabled: boom.play()
+                    except Exception: pass
+            elif b.phase == "flash":
+                if now - b.t_flash >= BOMB_FLASH_MS:
+                    self._set_ink(b.plan.ink_at(0.0)); b.phase = "blast"; b.t_blast = now
+            elif b.phase == "blast":
+                p = (now - b.t_blast) / float(BOMB_BLAST_MS)
+                if p >= 1.0:
+                    self._set_ink(b.plan.ink_at(1.0)); self.bombs.remove(b)
+                    self._ensure_timelapse()
+                    try: self.tl.capture(self.canvas, self.pal, force=True)
+                    except Exception: pass
+                else:
+                    self._set_ink(b.plan.ink_at(1.0 - (1.0 - p) ** 2))       # ease out: fast at first, then slows down
+
+    def bomb_fuse_char(self, b, now):
+        """Character shown at the bomb during the fuse: runs through all the shades BOMB_FUSE_LOOPS times."""
+        p = b.fuse_progress(now); n = self.pal.n
+        ch = self.pal.chars[int(p * BOMB_FUSE_LOOPS * n) % n]
+        return ch if ch != " " else "\u00b7"
+
+    def _draw_disc_outline(self, surf, cx, cy, R, color, glyph):
+        A = self.canvas.aspect; base_y = self.canvas_offset_y; g = self.glyphs.get(glyph, color)
+        inside = lambda x, y: (x - cx) ** 2 + ((y - cy) * A) ** 2 <= R * R
+        ry = int(math.ceil(R / A)) + 1; rx = int(R) + 1
+        for y in range(max(0, cy - ry), min(self.canvas.rows - 1, cy + ry) + 1):
+            for x in range(max(0, cx - rx), min(self.canvas.cols - 1, cx + rx) + 1):
+                if inside(x, y) and not (inside(x-1, y) and inside(x+1, y) and inside(x, y-1) and inside(x, y+1)):
+                    surf.blit(g, (x * self.char_w, base_y + y * self.char_h))
+
+    def bomb_ring_radius(self, b, now):
+        """Radius of the warning ring during the fuse: the full blast radius at the start, closing in faster and
+        faster (like a falling bomb) and reaching the centre cell exactly when the fuse ends, with the boom."""
+        p = b.fuse_progress(now)
+        return max(0.5, b.R * (1.0 - p ** BOMB_RING_POW))
+
+    def draw_bombs(self, surf, ticks):
+        """Fuse overlay: the centre character cycles through the shades and blinks red/white faster and faster,
+        while a ring shows the blast radius and shrinks onto the bomb."""
+        for b in self.bombs:
+            if b.phase != "fuse": continue
+            p = b.fuse_progress(ticks)
+            period = max(50, int(240 - 190 * p))
+            hot = (ticks // period) % 2 == 0
+            col = RED if hot else WHITE
+            k = 0.35 + 0.65 * p                                     # the ring gets brighter as it closes
+            ring_col = (int(110 + 145 * k), int(35 + 55 * k), int(30 + 30 * k)) if hot else (int(70 + 60 * k), int(25 + 20 * k), int(20 + 15 * k))
+            self._draw_disc_outline(surf, b.cx, b.cy, self.bomb_ring_radius(b, ticks), ring_col, "\u00b7")
+            r = pygame.Rect(b.cx * self.char_w, self.canvas_offset_y + b.cy * self.char_h, self.char_w, self.char_h)
+            pygame.draw.rect(surf, BLACK, r)
+            surf.blit(self.glyphs.get(self.bomb_fuse_char(b, ticks), col), r.topleft)
+            if hot: pygame.draw.rect(surf, RED, r.inflate(2, 2), 1)
+
+    # ---------- palette editing ----------
+    def table_chars(self):
+        """Characters offered by the table: only the ones the current font can draw, plus every palette character."""
+        if self._table_chars is None:
+            out = []; seen = set()
+            extra = "".join(e["chars"] for e in self.pal.map.values())
+            for ch in TABLE_SETS + extra:
+                if ch in seen or ch.isspace(): continue
+                m = self.font.metrics(ch)
+                if m and m[0] is not None:
+                    seen.add(ch); out.append(ch)
+            self._table_chars = out
+        return self._table_chars
+
+    def open_char_table(self, idx):
+        """Open the palette editor with palette position idx selected (the darkest slot is locked, so it picks the one next to it)."""
+        self.popup = PaletteEditorPopup(self, idx)
+
+    def open_pal_menu(self, nn, pos):
+        if nn in self.pal.map:
+            edited = nn in self.pal.edits
+            free = any(k not in self.pal.map for k in range(1, 11))
+            def do_restore(app): app.pal.restore(nn); app.flash(f"RESTORED {nn:02d}"); app.speak("palette restored")
+            def do_save(app): ok, msg = app.pal.save(nn); app.flash(msg); ok and app.speak("palette saved")
+            def do_new(app): ok, msg = app.pal.save_new(nn); app.flash(msg); ok and app.speak("palette saved")
+            items = [("RESTORE", do_restore if edited else None), ("SAVE", do_save if edited else None),
+                     ("SAVE NEW", do_new if free else None)]
+            title = f"{nn:02d}-{self.pal.map[nn]['name']}" + (" *" if edited else "")
+        else:
+            def do_here(app): ok, msg = app.pal.save_here(nn); app.flash(msg); ok and app.speak("palette saved")
+            items = [("SAVE CURRENT HERE", do_here)]
+            title = f"{nn:02d}-(EMPTY)"
+        self.popup = MenuPopup(self, title, items, pos)
+
+    # ---------- quick help ----------
+    def tooltip_at(self, mx, my):
+        """(key, [lines]) for the control under the mouse, or None."""
+        for r, nn in self._pal_slot_rects():
+            if r.collidepoint(mx, my):
+                if nn in self.pal.map:
+                    name = f"{nn:02d}-{self.pal.map[nn]['name']}" + (" (EDITED)" if nn in self.pal.edits else "")
+                    return ("slot", nn), [f"SHIFT+{nn % 10}  {name}", "RIGHT CLICK: PALETTE MENU"]
+                return ("slot", nn), [f"SHIFT+{nn % 10}  (EMPTY)", "RIGHT CLICK: SAVE CURRENT HERE"]
+        for rect, label in zip(self.ind_rects, self.ind_labels):
+            if rect.collidepoint(mx, my): return ("ind", label), [IND_TIPS[label]]
+        if self.tl_rect.collidepoint(mx, my):
+            P = self._tl_parts(); self._ensure_timelapse(); n = len(self.tl.frames); m = int(getattr(self.tl, "max_frames", TIMELAPSE_MAX_FRAMES))
+            if P["rec"].collidepoint(mx, my): return ("tl", "rec"), ["T  T.LAPSE REC ON/OFF", f"{n} / {m} FRAMES"]
+            if P["exp"].collidepoint(mx, my): return ("tl", "exp"), ["CTRL+E  EXPORT GIF"] + ([] if n else ["NO FRAMES YET"])
+            if P["clr"].collidepoint(mx, my): return ("tl", "clr"), ["CTRL+T  WIPE ALL FRAMES", "CLICK TWICE TO CONFIRM"]
+            return ("tl", "bar"), [f"T.LAPSE  {n} / {m} FRAMES"]
+        for rect, key, lines in ((self.new_btn, "new", ["N  NEW CANVAS"]), (self.load_btn, "load", ["LOAD A TXT FILE"]),
+                                 (self.import_btn, "import", ["IMPORT AN IMAGE"]), (self.save_btn, "save", ["CTRL+S  SAVE TXT + PNG"]),
+                                 (self.smart_btn, "smart", ["M  SMART BRUSH"]),
+                                 (self.edge_btn, "edge", ["E  SMART EDGE", "CTRL+LMB while in SMART"]),
+                                 (self.smudge_btn, "smudge", ["D  SMUDGE"]),
+                                 (self.bomb_btn, "bomb", ["K  BOMB", "CLICK: LIGHT THE FUSE", "BRUSH RADIUS = BLAST RADIUS"]),
+                                 (self.tru_btn, "tru", ["TAB  TRU MODE: NO BRUSHES", "MOUSE MOVES THE CURSOR", "TYPE EACH CHARACTER YOURSELF"]),
+                                 (self.grid_checkbox_rect, "grid", ["G  GRID ON/OFF"]),
+                                 (self.palette_rect, "bar", ["CLICK: PICK TONE", "DOUBLE CLICK: EDIT PALETTE"]),
+                                 (self.picker_rect, "sphere", ["CLICK / DRAG: PICK TONE", "DOUBLE CLICK: EDIT PALETTE"])):
+            if rect.collidepoint(mx, my): return ("btn", key), lines
+        sl = self.opacity_slider_rect
+        if sl is not None and sl.collidepoint(mx, my): return ("opacity",), ["CLICK / DRAG  or  SHIFT+WHEEL"]
+        for r in (self.fade_box_rect, self.fade_label_rect):
+            if r is not None and r.collidepoint(mx, my): return ("btn", "fade"), ["F  FADE ON/OFF", "THE STROKE DIES OUT AS YOU DRAW"]
+        fs = self.fade_slider_rect
+        if fs is not None and fs.collidepoint(mx, my): return ("fade",), ["CLICK / DRAG: FADE SPEED", "LEFT = LONG TRAIL", "RIGHT = SHORT TRAIL"]
+        return None
+
+    def _draw_tooltip(self, surf, mx, my, ticks):
+        tip = self.tooltip_at(mx, my) if not (self.left_down or self.right_down or self.mid_down) else None
+        key = tip[0] if tip else None
+        if key != self._tip_key: self._tip_key = key; self._tip_since = ticks
+        if not tip or ticks - self._tip_since < TOOLTIP_DELAY_MS: return
+        lines = tip[1]; f = self.font_ui; lh = f.get_height() + 2
+        w = max(f.size(l)[0] for l in lines) + 12; h = lh * len(lines) + 8
+        x = max(2, min(mx + 14, self.surface_w - w - 2)); y = max(2, min(my + 18, self.surface_h - h - 2))
+        r = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(surf, BLACK, r); pygame.draw.rect(surf, GREY, r, 1)
+        for i, l in enumerate(lines):
+            surf.blit(f.render(l, True, WHITE if i == 0 else GREY_TEXT), (x + 6, y + 4 + i * lh))
+
     def draw_tool_info(self,surf):
         ch=self.pal.char_from_value(self.current_value)
         infos=[
-            f"PAL: {self.pal.display_name}",
+            f"PAL: {self.pal.display_name}" + (" *" if self.pal.index in self.pal.edits else ""),
             f"TONE: {self.current_value:.2f}",
             f"CHAR: '{ch}'",
             f"CANVAS: {COLS}x{ROWS}",
             f"RADIUS: {self.brush_radius}",
             f"OPACITY: {self.brush_alpha:.2f}",
+            "FADE",
             f"SOUND: {'ON' if (self.sound_enabled and self.wav_variants) else 'OFF'}",
             f"SND FILE: {self.wav_name}",
             f"COPY: {COPY_DEFAULT_MODE.upper()}",
@@ -2530,8 +3529,23 @@ class App:
                 surf.blit(msg, (x, y))
 
         y=self.grid_rows_val_rect.bottom+UI_MARGIN//2
+        self.opacity_slider_rect = None; self.fade_slider_rect = self.fade_box_rect = self.fade_label_rect = None
         for s in infos:
-            surf.blit(self.font_ui.render(s,True,GREY),(self.canvas_px_w+UI_MARGIN,y))
+            if s == "FADE":
+                self._draw_fade_row(surf, y); y += self.font_ui.get_height() + 1; continue
+            t = self.font_ui.render(s,True,GREY)
+            surf.blit(t,(self.canvas_px_w+UI_MARGIN,y))
+            if s.startswith("OPACITY:"):
+                # minimal ASCII slider: ------|-------
+                cw = self.font_ui.size("-")[0]
+                x0 = self.canvas_px_w + UI_MARGIN + t.get_width() + 8
+                n = max(6, min(20, (self.canvas_px_w + SIDEBAR_W - UI_MARGIN - x0)//cw))
+                k = int(round(clamp01(self.brush_alpha) * (n - 1)))
+                left = self.font_ui.render("-"*k, True, GREY50); knob = self.font_ui.render("|", True, CYAN)
+                right = self.font_ui.render("-"*(n-1-k), True, GREY50)
+                surf.blit(left, (x0, y)); surf.blit(knob, (x0 + k*cw, y)); surf.blit(right, (x0 + (k+1)*cw, y))
+                self.opacity_slider_rect = pygame.Rect(x0, y - 1, n*cw, self.font_ui.get_height() + 2)
+                self._op_slider_geom = (x0, n)
             y+=self.font_ui.get_height()+1
         # Bottom-right help hint
         hint = self.font_small.render("SHIFT+H for HELP", True, GREY_TEXT)
@@ -2540,6 +3554,22 @@ class App:
         surf.blit(hint, (hx, hy))
         ver = self.font_small.render(f"v{VERSION}", True, GREY_TEXT)
         surf.blit(ver, (self.canvas_px_w + UI_MARGIN, hy))
+
+    def _draw_fade_row(self, surf, y):
+        """[x] FADE ------|-------   (same ASCII slider as OPACITY, lined up under it)."""
+        f = self.font_ui; on = self.fade_on; fh = f.get_height()
+        bs = max(6, fh - 4); x = self.canvas_px_w + UI_MARGIN
+        box = pygame.Rect(x, y + 2, bs, bs)
+        pygame.draw.rect(surf, WHITE if on else GREY, box, 1)
+        if on: pygame.draw.rect(surf, WHITE, box.inflate(-4, -4), 0)
+        lab = f.render("FADE", True, WHITE if on else GREY); surf.blit(lab, (box.right + 6, y))
+        self.fade_box_rect = box; self.fade_label_rect = pygame.Rect(x, y, box.w + 6 + lab.get_width(), fh)
+        if self._op_slider_geom is None: return
+        x0, n = self._op_slider_geom; cw = f.size("-")[0]
+        k = int(round(clamp01(self.fade_speed) * (n - 1)))
+        left = f.render("-" * k, True, GREY50); knob = f.render("|", True, CYAN if on else GREY); right = f.render("-" * (n - 1 - k), True, GREY50)
+        surf.blit(left, (x0, y)); surf.blit(knob, (x0 + k * cw, y)); surf.blit(right, (x0 + (k + 1) * cw, y))
+        self.fade_slider_rect = pygame.Rect(x0, y - 1, n * cw, fh + 2)
 
     # ---- help ----
     def draw_help_overlay(self,surf,mx,my,ticks):
@@ -2572,18 +3602,25 @@ class App:
             ("I","INVERT PALETTE"),
             ("S","SOFTEDGE ON/OFF"),
             ("SHFT+S","SOUND ON/OFF"),
-            ("SHFT+1<->0","PALETTE"),
+            ("SHFT+1<->0","PALETTE (OR BAR)"),
+            ("2xCLK TONE","EDIT PALETTE"),
+            ("TAB","TRU: TYPE IT"),
+            ("V","VOICE ON/OFF"),
+            ("ALT+1<->0","TRU: LEVEL"),
+            ("RCLK PAL BTN","RESTORE / SAVE"),
             ("1<->0","TONE"),
             ("- | =","TONE UP|DOWN"),
             ("CTRL+WHEEL","TONE"),
             ("[", "RADIUS DEC"),
             ("]", "RADIUS INC"),
             ("SHFT+WHEEL","OPACITY"),
+            ("F","FADE ON/OFF"),
             ("B","BLUR MODE"),
             ("M","SMART BRUSH"),
             ("E","SMART EDGE"),
             ("CTRL+LMB","SMART EDGE (SMART)"),
             ("D","SMUDGE (OPAC=FORCE)"),
+            ("K","BOMB (RADIUS=BLAST)"),
             ("P","PEN PRESSURE MODE"),
             ("L","LINE MODE"),
             ("A","LINE AA ON/OFF"),
@@ -2711,6 +3748,7 @@ class App:
         self.draw_tl_progress_bar(surf)
         self.draw_mode_stack(surf)
         self.draw_palette_bar(surf)
+        self.draw_pal_slots(surf, mx, my)
         self.draw_grid_panel(surf)
 
         # buttons
@@ -2726,15 +3764,28 @@ class App:
         self.draw_toggle_button(surf, self.smart_btn, "SMART [M]", self.mode=="smart")
         self.draw_toggle_button(surf, self.edge_btn,  "EDGE [E]", self.mode=="edge")
         self.draw_toggle_button(surf, self.smudge_btn, "SMUDGE [D]", self.mode=="smudge", SMUDGE_RGB)
+        self.draw_toggle_button(surf, self.bomb_btn, "BOMB [K]", self.mode=="bomb", BOMB_RGB)
+        self.draw_toggle_button(surf, self.tru_btn, "TRU: TYPE IT [TAB]", self.mode=="tru", TRU_RGB)
 
         self.draw_tool_info(surf)
 
+        self.draw_bombs(surf, ticks)
+
         # ring
-        if self.hover_cell:
+        if self.mode == "tru":
+            self.draw_tru_cursor(surf, ticks)
+        elif self.hover_cell and self.mode == "bomb":
+            hx, hy = self.hover_cell
+            self._draw_disc_outline(surf, hx, hy, bomb_radius(self.brush_radius), BOMB_RGB, "\u00b7")
+            surf.blit(self.glyphs.get("*", BOMB_RGB), (hx * self.char_w, self.canvas_offset_y + hy * self.char_h))
+        elif self.hover_cell:
             edge_now = (self.mode=="edge") or (self.mode=="smart" and bool(pygame.key.get_mods() & pygame.KMOD_CTRL))
             ring_col = RED if self.blur_active() else (HL_RGB if self.mode=="hlight" else (CYAN if edge_now else (SMUDGE_RGB if self.mode=="smudge" else WHITE)))
             self.draw_brush_ring(surf, ring_col, ticks)
         self.draw_help_overlay(surf, mx, my, ticks)
+        if self.popup: self.popup.draw(self, surf, mx, my)
+        elif not self.show_help: self._draw_tooltip(surf, mx, my, ticks)
+        self.draw_caption(surf, ticks)
         if self.flash_msg and ticks < self.flash_until:
             t=self.font.render(self.flash_msg,True,CYAN)
             r=pygame.Rect(0,0,t.get_width()+16,t.get_height()+8)
@@ -2759,6 +3810,12 @@ class App:
                 return key
         return None
 
+    def set_opacity_from_mouse(self, mx):
+        r = self.opacity_slider_rect
+        if r is None: return
+        frac = (mx - r.x) / float(max(1, r.w - 1))
+        self.brush_alpha = max(0.05, min(1.0, round(frac * 20) / 20.0))
+
     def picker_drag_update(self, mx, my):
         """LMB held on the sphere / palette bar: follow the mouse. Outside the sphere it clamps to the
         nearest cell instead of jumping to the darkest tone. No click sound while dragging."""
@@ -2770,11 +3827,43 @@ class App:
             self.current_value = self._picker_grid[key][1]
             self.picker_pick = key
             self.picker_sel_rect = self._picker_grid[key][0]
+        elif self.picker_drag == "opacity":
+            self.set_opacity_from_mouse(mx)
+        elif self.picker_drag == "fade":
+            self.set_fade_from_mouse(mx)
         elif self.picker_drag == "bar" and self.palette_items:
             rect, idx = min(self.palette_items, key=lambda it: abs(it[0].centerx - mx))
             self.current_value = self.pal.value_from_idx(idx)
 
-    def handle_picker_click(self, mx, my):
+    def handle_picker_click(self, mx, my, button=1):
+        # T.LAPSE row (REC / GIF / CLR)
+        if self.tl_rect.collidepoint(mx, my):
+            self._picker_grabbed = None
+            return self.tl_row_click(mx, my, button)
+        # opacity slider
+        if self.opacity_slider_rect is not None and self.opacity_slider_rect.collidepoint(mx, my) and button == 1:
+            self.set_opacity_from_mouse(mx); self.play_ui_click(); self._picker_grabbed = "opacity"
+            return True
+        # fade checkbox / slider
+        if button == 1:
+            for r in (self.fade_box_rect, self.fade_label_rect):
+                if r is not None and r.collidepoint(mx, my):
+                    self._picker_grabbed = None; self.toggle_fade(); return True
+            if self.fade_slider_rect is not None and self.fade_slider_rect.collidepoint(mx, my):
+                self.set_fade_from_mouse(mx); self.play_ui_click(); self._picker_grabbed = "fade"
+                return True
+        # palette shortcut bar (same as SHIFT+1..0); right click opens the palette menu (empty slots too)
+        for rect, nn in self._pal_slot_rects():
+            if rect.collidepoint(mx, my):
+                self._picker_grabbed = None
+                if button == 3:
+                    self.open_pal_menu(nn, (rect.x, rect.bottom + 2)); return True
+                if nn not in self.pal.map: return True          # empty slot: nothing to select
+                self.picker_sel_rect = None
+                self.pal.set_index(nn)
+                self.play_ui_click()
+                self._picker_grabbed = None          # a click here must not start a tone drag
+                return True
         # palette bar
         if self.palette_rect.collidepoint(mx, my):
             if self.palette_items:
@@ -2782,6 +3871,12 @@ class App:
                 rect, idx = min(self.palette_items, key=lambda it: abs(it[0].centerx - mx))
                 self.current_value = self.pal.value_from_idx(idx)
                 self.play_ui_click()  # <- som de clique
+                now = pygame.time.get_ticks()
+                if button == 1 and self._last_bar_click and self._last_bar_click[1] == idx and now - self._last_bar_click[0] <= DOUBLE_CLICK_MS:
+                    self._last_bar_click = None
+                    self.open_char_table(idx)                    # double click: character table
+                    return True
+                self._last_bar_click = (now, idx)
                 self._picker_grabbed = "bar"
                 return True
             # fallback: compute index from position
@@ -2810,6 +3905,12 @@ class App:
                 self.picker_pick = None
                 self.picker_sel_rect = pygame.Rect(mx, my, 1, 1)   # anchor: nearest darkest cell
             self.play_ui_click()  # <- som de clique
+            now = pygame.time.get_ticks(); idx = self.pal.idx_from_value(self.current_value)
+            if button == 1 and self._last_sphere_click and self._last_sphere_click[1] == idx and now - self._last_sphere_click[0] <= DOUBLE_CLICK_MS:
+                self._last_sphere_click = None
+                self.open_char_table(idx)                         # double click on the sphere: palette editor
+                return True
+            self._last_sphere_click = (now, idx)
             self._picker_grabbed = "sphere"
             return True
 
@@ -2875,8 +3976,16 @@ class App:
         ctrl=bool(pygame.key.get_mods() & pygame.KMOD_CTRL)
         x,y=cell
         r_eff=self.eff_radius(); a_eff=self.eff_alpha()
+        if not self.stroke_started: self.fade_dist = 0.0; self.fade_last = None       # a new stroke starts at full strength
+        if self.fade_on:
+            if self.fade_last is not None and self.fade_last != cell:
+                self.fade_dist += math.hypot(cell[0] - self.fade_last[0], (cell[1] - self.fade_last[1]) * self.canvas.aspect)
+            self.fade_last = cell
+            a_eff *= self.fade_factor()
 
         if self.mode=="line": return
+        if self.mode=="tru":
+            self.tru_cursor = cell; return                # the mouse only moves the cursor
 
         # Highlight mode: left applies almost-white luma; right erases to default grey
         if self.mode=="hlight":
@@ -2930,6 +4039,23 @@ class App:
             self.canvas.add_disc(x,y,r_eff, delta, a_eff, self.soft_edge)
             if smart: self.smart_refine(x,y,r_eff)
 
+    def fade_length(self):
+        """Stroke length (cells) over which the ink dies out: the slider is a speed, right = faster = shorter."""
+        return FADE_LEN_MAX * (FADE_LEN_MIN / FADE_LEN_MAX) ** max(0.0, min(1.0, self.fade_speed))
+
+    def fade_factor(self):
+        """1.0 at the start of a stroke, 0.0 once the stroke has travelled fade_length() cells."""
+        return max(0.0, 1.0 - self.fade_dist / self.fade_length())
+
+    def toggle_fade(self):
+        self.fade_on = not self.fade_on; self.play_ui_click()
+
+    def set_fade_from_mouse(self, mx):
+        r = self.fade_slider_rect
+        if r is None: return
+        frac = (mx - r.x) / float(max(1, r.w - 1))
+        self.fade_speed = max(0.05, min(1.0, round(frac * 20) / 20.0)); self.fade_on = True
+
     def eff_alpha(self):
         """Brush opacity, scaled by pen pressure when the mode asks for it."""
         return self.brush_alpha * (self.pen.scale() if self.pen.mode in ("OPACITY", "BOTH") else 1.0)
@@ -2952,13 +4078,144 @@ class App:
             self.canvas.smudge_step(px, py, rad, qx-px, qy-py, k)
             px, py = qx, qy
 
+    # ---------- voice ----------
+    def speak(self, text, force=False):
+        """Say a short phrase with the raw voice synth (when the voice and the sound are on)."""
+        if not (self.voice_on or force) or not self.sound_enabled: return False
+        self.last_spoken = text
+        if VOICE_CAPTIONS:
+            try: self.caption = (text.upper(), [(w.upper(), a, b) for w, a, b in self.voice.timing(text)], pygame.time.get_ticks())
+            except Exception as e: print("[VOICE]", e)
+        try:
+            if not pygame.mixer.get_init(): return True
+            snd = self._voice_snd.get(text)
+            if snd is None:
+                snd = pygame.mixer.Sound(buffer=self.voice.render(text).tobytes()); self._voice_snd[text] = snd
+            ch = pygame.mixer.Channel(VOICE_CHANNEL); ch.set_volume(1.0); ch.play(snd)
+        except Exception as e:
+            print("[VOICE]", e)
+        return True
+
+    def caption_words(self, ticks):
+        """The words of the current caption that have been spoken by now (None when there is no caption to show)."""
+        if not self.caption: return None
+        text, words, t0 = self.caption
+        # the frame's `ticks` is read at the start of the frame, the phrase can be spoken later in the same frame: never expire on a negative age
+        el = max(0.0, (ticks - t0) / 1000.0)
+        end = words[-1][2] if words else 0.0
+        if el > end + VOICE_CAPTION_HOLD: self.caption = None; return None
+        return [w for w, a, b in words if a - 0.02 <= el]
+
+    def draw_caption(self, surf, ticks):
+        shown = self.caption_words(ticks)
+        if not shown: return
+        t = self.font.render(" ".join(shown), True, VOICE_CAPTION_RGB)
+        r = pygame.Rect(0, 0, t.get_width() + 20, t.get_height() + 8); r.midtop = (self.canvas_px_w // 2, 4)
+        pygame.draw.rect(surf, BLACK, r, 0, border_radius=4); pygame.draw.rect(surf, (90, 75, 0), r, 1, border_radius=4)
+        surf.blit(t, (r.x + 10, r.y + 4))
+
+    def toggle_voice(self):
+        if self.voice_on:
+            self.speak("voice off", force=True); self.voice_on = False; self.flash("VOICE OFF")
+        else:
+            self.voice_on = True; self.speak("voice on"); self.flash("VOICE ON")
+
+    def speak_mode(self, mode):
+        if mode == "tru": self.speak(self._voice_rng.choice(VOICE_TRU_LINES))
+        elif mode in VOICE_MODE_LINES: self.speak(VOICE_MODE_LINES[mode])
+
+    # ---------- TRU mode: every character typed by hand ----------
+    def tru_level_idx(self, k):
+        """Alt+1 (darkest) .. Alt+0 (lightest) -> palette position; spreads the 10 keys over however many levels the palette has."""
+        n = self.pal.n
+        return (n - 1) - int(round((k - 1) / 9.0 * (n - 1)))
+
+    def tru_put(self, ch=None, idx=None):
+        """Put a palette level (idx) or a typed character at the cursor."""
+        if self.tru_cursor is None: return False
+        x, y = self.tru_cursor
+        if not (0 <= x < self.canvas.cols and 0 <= y < self.canvas.rows): return False
+        if idx is None:
+            if ch == " ": idx = self.pal.n - 1
+            elif ch in self.pal.chars[:self.pal.n - 1]: idx = self.pal.chars.index(ch)
+        self.push_undo()
+        if idx is not None:
+            self.canvas.buf[y, x] = self.pal.value_from_idx(idx); self.canvas.ov[y, x] = 0
+        else:
+            tone = self.char_tone(ch)
+            if tone is None: self.undo_stack.pop(); self.flash(f"'{ch}' IS NOT IN THE FONT"); return False
+            self.canvas.buf[y, x] = tone; self.canvas.ov[y, x] = ord(ch)
+        self.canvas.col[y, x] = TEXT_LUMA
+        self.play_ui_click()
+        return True
+
+    def char_tone(self, ch):
+        """Tone a free typed character counts as (from its ink), or None when the font cannot draw it."""
+        if ch in self.edge.tone_of: return self.edge.tone_of[ch]
+        cache = self.__dict__.setdefault("_char_tone_cache", {})
+        if ch not in cache: cache[ch] = self._char_tone_measure(ch)
+        return cache[ch]
+
+    def _char_tone_measure(self, ch):
+        m = self.font.metrics(ch)
+        if not m or m[0] is None: return None
+        try:
+            surf = self.font.render(ch, True, (255, 255, 255), (0, 0, 0))
+            a = pygame.surfarray.array3d(surf)[:, :, 0].astype(np.float32) / 255.0
+        except Exception:
+            return None
+        ink = float(a.sum()) / max(1, self.char_w * self.char_h)
+        return 1.0 - float(np.clip(ink * self.edge.K, 0.4, 1.0))
+
+    def tru_move(self, dx, dy):
+        x, y = self.tru_cursor or (0, 0)
+        self.tru_cursor = (max(0, min(self.canvas.cols - 1, x + dx)), max(0, min(self.canvas.rows - 1, y + dy)))
+
+    def tru_key(self, ev):
+        """Keyboard in TRU mode. Returns True when the key was consumed (Ctrl shortcuts still go through)."""
+        mods = getattr(ev, "mod", pygame.key.get_mods())
+        if mods & pygame.KMOD_CTRL: return False
+        key = ev.key
+        if key in (pygame.K_ESCAPE, pygame.K_TAB):
+            self.mode = "paint"; self.shift_blur = False; return True
+        if key == pygame.K_F1: self.show_help = not self.show_help; return True
+        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_LALT, pygame.K_RALT, pygame.K_CAPSLOCK): return True
+        if self.tru_cursor is None: self.tru_cursor = self.hover_cell or (0, 0)
+        if key == pygame.K_LEFT: self.tru_move(-1, 0)
+        elif key == pygame.K_RIGHT: self.tru_move(1, 0)
+        elif key == pygame.K_UP: self.tru_move(0, -1)
+        elif key == pygame.K_DOWN: self.tru_move(0, 1)
+        elif key == pygame.K_HOME: self.tru_cursor = (0, self.tru_cursor[1])
+        elif key == pygame.K_END: self.tru_cursor = (self.canvas.cols - 1, self.tru_cursor[1])
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER): self.tru_cursor = (0, min(self.canvas.rows - 1, self.tru_cursor[1] + 1))
+        elif key == pygame.K_BACKSPACE:
+            self.tru_move(-1, 0); self.tru_put(idx=self.pal.n - 1)
+        elif key == pygame.K_DELETE: self.tru_put(idx=self.pal.n - 1)
+        elif (mods & pygame.KMOD_ALT) and (pygame.K_0 <= key <= pygame.K_9 or pygame.K_KP0 <= key <= pygame.K_KP9):
+            d = (key - pygame.K_0) if key <= pygame.K_9 else (key - pygame.K_KP0)
+            self.tru_put(idx=self.tru_level_idx(10 if d == 0 else d))     # changes the character in place
+        else:
+            ch = getattr(ev, "unicode", "")
+            if len(ch) == 1 and ch.isprintable():
+                if self.tru_put(ch=ch) and TRU_ADVANCE: self.tru_move(1, 0)
+        return True
+
+    def draw_tru_cursor(self, surf, ticks):
+        if self.tru_cursor is None: return
+        x = min(self.tru_cursor[0], self.canvas.cols - 1); y = min(self.tru_cursor[1], self.canvas.rows - 1)
+        r = pygame.Rect(x * self.char_w, self.canvas_offset_y + y * self.char_h, self.char_w, self.char_h)
+        if (ticks // TRU_BLINK_MS) % 2 == 0:
+            pygame.draw.rect(surf, TRU_RGB, r, 1)
+        pygame.draw.line(surf, TRU_RGB, (r.x, r.bottom - 1), (r.right - 1, r.bottom - 1), 2)
+
     def toggle_smart_mode(self, which):
         if self.mode == which:
             self.mode = "paint"
         else:
-            if self.mode not in ("hlight", "smart", "edge", "smudge"):
+            if self.mode not in ("hlight", "smart", "edge", "smudge", "bomb", "tru"):
                 self.prev_mode = self.mode
             self.mode, self.pt1 = which, None
+            if which == "tru" and self.tru_cursor is None: self.tru_cursor = self.hover_cell or (0, 0)
         self.shift_blur = False
 
     def blur_active(self):
@@ -3023,6 +4280,13 @@ class App:
                 if ev.type == pygame.QUIT:
                     self.running = False
 
+                elif ev.type == pygame.KEYDOWN and self.popup:
+                    self.popup.on_key(self, ev.key)
+                    if self.popup and getattr(ev, "unicode", ""): self.popup.on_text(self, ev.unicode)
+
+                elif ev.type == pygame.KEYDOWN and self.mode == "tru" and self.tru_key(ev):
+                    pass
+
                 elif ev.type == pygame.KEYDOWN:
                     mods = pygame.key.get_mods()
                     ctrl = bool(mods & pygame.KMOD_CTRL)
@@ -3036,8 +4300,7 @@ class App:
 
                     # --- Timelapse controls (agora independentes) ---
                     if (ev.key == pygame.K_t) and (not ctrl) and (not shift):
-                        self.tl.enabled = not self.tl.enabled
-                        print("[TL] Recording:", "ON" if self.tl.enabled else "OFF")
+                        self.tl_toggle()
 
                     elif ctrl and (ev.key == pygame.K_t):
                         self.tl.reset()
@@ -3107,7 +4370,7 @@ class App:
                             self.pt1 = None
                         elif self.mode == "hlight":
                             self.mode = self.prev_mode if (self.prev_mode and self.prev_mode != "hlight") else "paint"
-                        elif self.mode in ("smart", "edge", "smudge"):
+                        elif self.mode in ("smart", "edge", "smudge", "bomb", "tru"):
                             self.mode = "paint"
 
                     elif ctrl and (not (mods & pygame.KMOD_ALT)) and ev.key == pygame.K_s:
@@ -3151,6 +4414,9 @@ class App:
                     elif ev.key == pygame.K_g:
                         self.grid_enabled = not self.grid_enabled
 
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_f:
+                        self.toggle_fade()
+
                     elif (not ctrl) and (not shift) and ev.key == pygame.K_m:
                         self.toggle_smart_mode("smart")
 
@@ -3159,6 +4425,15 @@ class App:
 
                     elif (not ctrl) and (not shift) and ev.key == pygame.K_d:
                         self.toggle_smart_mode("smudge")
+
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_k:
+                        self.toggle_smart_mode("bomb")
+
+                    elif ev.key == pygame.K_TAB and (not ctrl):
+                        self.toggle_smart_mode("tru")
+
+                    elif (not ctrl) and (not shift) and ev.key == pygame.K_v:
+                        self.toggle_voice()
 
                     elif (not ctrl) and (not shift) and ev.key == pygame.K_p:
                         self.pen.cycle_mode()
@@ -3236,6 +4511,19 @@ class App:
                             self.mode = "hlight"
                             self.shift_from_hlight = False
 
+                elif ev.type == pygame.MOUSEWHEEL and self.popup:
+                    pass
+
+                elif ev.type == pygame.MOUSEBUTTONDOWN and self.popup:
+                    self.popup.on_click(self, mx, my, ev.button)
+
+                elif ev.type == pygame.MOUSEMOTION and self.popup:
+                    if getattr(self.popup, "on_drag", None) and (ev.buttons[0] if hasattr(ev, "buttons") else False):
+                        self.popup.on_drag(self, mx, my)
+
+                elif ev.type == pygame.MOUSEBUTTONUP and self.popup:
+                    if getattr(self.popup, "on_release", None): self.popup.on_release(self)
+
                 elif ev.type == pygame.MOUSEWHEEL:
                     mods = pygame.key.get_mods()
                     ctrl = bool(mods & pygame.KMOD_CTRL)
@@ -3282,7 +4570,7 @@ class App:
 
                     # Click on pickers/bars first
                     self._picker_grabbed = None
-                    if self.handle_picker_click(mx, my):
+                    if self.handle_picker_click(mx, my, ev.button):
                         if ev.button == 1:
                             self.picker_drag = self._picker_grabbed    # click and drag keeps changing the tone
                         continue
@@ -3297,10 +4585,16 @@ class App:
                             self.play_ui_click(); self.toggle_smart_mode("edge"); continue
                         if self.smudge_btn.collidepoint(mx, my):
                             self.play_ui_click(); self.toggle_smart_mode("smudge"); continue
+                        if self.bomb_btn.collidepoint(mx, my):
+                            self.play_ui_click(); self.toggle_smart_mode("bomb"); continue
+                        if self.tru_btn.collidepoint(mx, my):
+                            self.play_ui_click(); self.toggle_smart_mode("tru"); continue
 
                     # Grid UI clicks
                     if ev.button == 1:
-                        if self.grid_checkbox_rect.collidepoint(mx,my) or self.grid_label_rect.collidepoint(mx,my):
+                        if self.voice_checkbox_rect.collidepoint(mx,my) or self.voice_label_rect.collidepoint(mx,my):
+                            self.toggle_voice()
+                        elif self.grid_checkbox_rect.collidepoint(mx,my) or self.grid_label_rect.collidepoint(mx,my):
                             self.grid_enabled = not self.grid_enabled; self.play_ui_click()
                         elif not GRID_MATCH_CELLS:
                             if self.grid_cols_minus.collidepoint(mx,my):
@@ -3422,6 +4716,11 @@ class App:
 
                         else:
                             # STROKE START (LMB)
+                            if self.mode == "bomb":
+                                cell = self.mouse_to_cell(mx, my)
+                                if cell and not self.blast_busy(): self.place_bomb(cell)
+                                continue
+                            if self.blast_busy(): continue            # canvas is busy while debris is flying
                             self.snd_last_cell = None
                             self.left_down = True
                             cell = self.mouse_to_cell(mx, my)
@@ -3448,6 +4747,7 @@ class App:
 
                 elif ev.type == pygame.MOUSEMOTION:
                     self.hover_cell = self.mouse_to_cell(mx, my)
+                    if self.mode == "tru" and self.hover_cell: self.tru_cursor = self.hover_cell
                     if self.picker_drag:
                         self.picker_drag_update(mx, my)
                     if (self.left_down or self.right_down or self.mid_down) and self.hover_cell and (self.hover_cell != self.snd_last_cell):
@@ -3456,6 +4756,11 @@ class App:
                         over = any(r.collidepoint(mx, my) for r,_ in self.help_click_zones)
                         try: pygame.mouse.set_cursor(self.cursor_hand if over else self.cursor_arrow)
                         except Exception: pass
+
+            # the voice announces a mode change (not the temporary Shift switch out of HLIGHT)
+            if self.mode != self._voice_mode:
+                if not self.shift_from_hlight: self.speak_mode(self.mode)
+                self._voice_mode = self.mode
 
             # Continuous paint
             if (self.left_down or self.right_down or self.mid_down) and (self.mode != "line"):
@@ -3468,6 +4773,9 @@ class App:
             
             if self.processing_active:
                 self.processing_ticks += 1
+
+            # Bombs advance with real time
+            self.update_bombs(ticks)
 
             # Draw
             self.redraw_canvas_ascii(self.surface, mx, my, ticks)

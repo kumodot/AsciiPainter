@@ -20,3 +20,7 @@ docs/icon_sources/
 # Editors
 .vscode/
 .idea/
+
+# Large local media and backups
+Media/
+*.bak
